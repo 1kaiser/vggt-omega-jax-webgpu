@@ -52,10 +52,10 @@ The JAX implementation's predictions match the PyTorch implementation's predicti
 
 | Output Tensor | Shape | Max Absolute Difference | Mean Absolute Difference | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| `camera_and_register_tokens` | `(1, 2, 17, 2048)` | `5.340576e-05` | `1.999295e-06` | PASSED |
-| `pose_enc` | `(1, 2, 9)` | `1.192093e-07` | `3.231172e-08` | PASSED |
-| `depth` | `(1, 2, 448, 592, 1)` | `9.059906e-06` | `5.387419e-07` | PASSED |
-| `depth_conf` | `(1, 2, 448, 592)` | `3.252029e-04` | `2.490888e-05` | PASSED |
+| `camera_and_register_tokens` | `(1, 8, 17, 2048)` | `6.103516e-05` | `2.305839e-06` | PASSED |
+| `pose_enc` | `(1, 8, 9)` | `4.768372e-07` | `9.035769e-08` | PASSED |
+| `depth` | `(1, 8, 448, 592, 1)` | `1.072884e-05` | `1.340227e-07` | PASSED |
+| `depth_conf` | `(1, 8, 448, 592)` | `5.702972e-04` | `1.471784e-05` | PASSED |
 
 Below is the comparison plot displaying the input frames, the predicted depth maps from PyTorch and JAX, and their absolute error difference maps:
 
@@ -70,10 +70,10 @@ Below is the 3D reconstruction multiview comparison (Top, Side, and Front orthog
 
 ### Execution Speed Comparison (CPU Benchmarks)
 
-We benchmarked the CPU inference time on the first 2 frames of the `pinecone` dataset (resized to 512x512):
-*   **PyTorch CPU**: `4.79 seconds`
-*   **JAX CPU (Cold / Compilation + Inference)**: `25.66 seconds`
-*   **JAX CPU (Warm / JIT Compiled Inference)**: `18.05 seconds`
+We benchmarked the CPU inference time on a sequence of 8 frames of the `pinecone` dataset (resized to 512x512):
+*   **PyTorch CPU**: `22.80 seconds`
+*   **JAX CPU (Cold / Compilation + Inference)**: `63.31 seconds`
+*   **JAX CPU (Warm / JIT Compiled Inference)**: `56.68 seconds`
 
 *Note: Since JAX CPU execution does not leverage parallel MKL/oneDNN optimization threads by default, JAX CPU inference is slower than PyTorch CPU. On GPU backends, JAX JIT compilation leverages XLA memory-fusion and kernel generation, resulting in significantly faster execution.*
 

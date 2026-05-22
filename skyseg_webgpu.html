@@ -1,0 +1,1151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VGGT-Omega Sky Segmentation WebGPU Demo</title>
+    
+    <!-- SEO Meta Tags -->
+    <meta name="description" content="Hardware-accelerated sky segmentation in the browser using WebGPU and ONNX Runtime Web, based on the VGGT-Omega CVPR 2026 oral model.">
+    <meta name="keywords" content="WebGPU, ONNX Runtime Web, VGGT-Omega, Sky Segmentation, Computer Vision, browser AI">
+    
+    <!-- Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700;800&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    
+    <!-- ONNX Runtime Web (WebGPU Build) -->
+    <script src="https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/ort.webgpu.min.js"></script>
+
+    <style>
+        :root {
+            --bg-dark: #090a0f;
+            --bg-card: rgba(18, 20, 29, 0.7);
+            --bg-card-border: rgba(255, 255, 255, 0.08);
+            --accent-glow: rgba(0, 240, 255, 0.15);
+            --color-primary: #00f0ff;
+            --color-secondary: #ad00ff;
+            --color-success: #00ff66;
+            --color-text: #e2e8f0;
+            --color-text-muted: #94a3b8;
+            --font-display: 'Outfit', 'Space Grotesk', sans-serif;
+            --font-sans: 'Inter', sans-serif;
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg-dark);
+            color: var(--color-text);
+            min-height: 100vh;
+            display: flex;
+            flex-direction: column;
+            overflow-x: hidden;
+            background-image: 
+                radial-gradient(circle at 10% 20%, rgba(173, 0, 255, 0.05) 0%, transparent 40%),
+                radial-gradient(circle at 90% 80%, rgba(0, 240, 255, 0.05) 0%, transparent 40%);
+        }
+
+        header {
+            padding: 2rem 1.5rem 1rem;
+            max-width: 1200px;
+            width: 100%;
+            margin: 0 auto;
+            text-align: center;
+        }
+
+        h1 {
+            font-family: var(--font-display);
+            font-size: 2.5rem;
+            font-weight: 800;
+            letter-spacing: -0.05em;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+        }
+
+        .subtitle {
+            color: var(--color-text-muted);
+            font-size: 1rem;
+            max-width: 600px;
+            margin: 0 auto 1.5rem;
+            line-height: 1.5;
+        }
+
+        main {
+            flex: 1;
+            max-width: 1200px;
+            width: 100%;
+            margin: 0 auto;
+            padding: 0 1.5rem 3rem;
+            display: grid;
+            grid-template-columns: 350px 1fr;
+            gap: 2rem;
+        }
+
+        @media (max-width: 900px) {
+            main {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Glassmorphism card utility */
+        .glass-card {
+            background: var(--bg-card);
+            border: 1px solid var(--bg-card-border);
+            border-radius: 16px;
+            backdrop-filter: blur(12px);
+            padding: 1.5rem;
+            box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+            transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+
+        .glass-card:hover {
+            border-color: rgba(0, 240, 255, 0.2);
+            box-shadow: 0 12px 40px 0 rgba(0, 240, 255, 0.05);
+        }
+
+        .panel-title {
+            font-family: var(--font-display);
+            font-size: 1.25rem;
+            font-weight: 600;
+            margin-bottom: 1.25rem;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+            padding-bottom: 0.75rem;
+        }
+
+        .panel-title i {
+            color: var(--color-primary);
+        }
+
+        /* Control Form Elements */
+        .form-group {
+            margin-bottom: 1.25rem;
+        }
+
+        .form-group label {
+            display: block;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--color-text-muted);
+            margin-bottom: 0.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+
+        .select-btn-group {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 0.5rem;
+            background: rgba(0, 0, 0, 0.2);
+            padding: 0.25rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.05);
+        }
+
+        .select-btn {
+            background: transparent;
+            border: none;
+            color: var(--color-text-muted);
+            padding: 0.5rem;
+            border-radius: 6px;
+            font-size: 0.9rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+
+        .select-btn.active {
+            background: linear-gradient(135deg, var(--color-primary) 0%, rgba(0, 240, 255, 0.4) 100%);
+            color: var(--bg-dark);
+            box-shadow: 0 2px 8px rgba(0, 240, 255, 0.2);
+        }
+
+        .btn-primary {
+            width: 100%;
+            background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 100%);
+            border: none;
+            color: white;
+            padding: 0.85rem;
+            border-radius: 8px;
+            font-family: var(--font-display);
+            font-weight: 700;
+            font-size: 1rem;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            box-shadow: 0 4px 15px rgba(173, 0, 255, 0.2);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        .btn-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px rgba(0, 240, 255, 0.4);
+        }
+
+        .btn-primary:active:not(:disabled) {
+            transform: translateY(0);
+        }
+
+        .btn-primary:disabled {
+            background: rgba(255, 255, 255, 0.1);
+            color: var(--color-text-muted);
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        /* Upload Container */
+        .upload-container {
+            border: 2px dashed rgba(255, 255, 255, 0.1);
+            border-radius: 12px;
+            padding: 2rem 1rem;
+            text-align: center;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            background: rgba(0, 0, 0, 0.1);
+            position: relative;
+        }
+
+        .upload-container:hover, .upload-container.dragover {
+            border-color: var(--color-primary);
+            background: rgba(0, 240, 255, 0.02);
+        }
+
+        .upload-icon {
+            font-size: 2.5rem;
+            color: var(--color-text-muted);
+            margin-bottom: 0.75rem;
+        }
+
+        .upload-text {
+            font-size: 0.9rem;
+            color: var(--color-text-muted);
+            line-height: 1.4;
+        }
+
+        .upload-text span {
+            color: var(--color-primary);
+            text-decoration: underline;
+        }
+
+        .upload-input {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            opacity: 0;
+            cursor: pointer;
+        }
+
+        /* Progress Ring / Bar */
+        .progress-wrapper {
+            margin-top: 1rem;
+            display: none;
+        }
+
+        .progress-bar-bg {
+            height: 6px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 0.5rem;
+        }
+
+        .progress-bar-fill {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, var(--color-primary), var(--color-secondary));
+            border-radius: 3px;
+            transition: width 0.1s ease;
+        }
+
+        .progress-info {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.75rem;
+            color: var(--color-text-muted);
+        }
+
+        /* Opacity Slider */
+        .slider-container {
+            margin-top: 1.5rem;
+            background: rgba(255, 255, 255, 0.02);
+            padding: 1rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.04);
+        }
+
+        .slider-header {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            font-weight: 500;
+            color: var(--color-text-muted);
+            margin-bottom: 0.5rem;
+        }
+
+        .range-slider {
+            -webkit-appearance: none;
+            width: 100%;
+            height: 6px;
+            border-radius: 3px;
+            background: rgba(255, 255, 255, 0.1);
+            outline: none;
+            cursor: pointer;
+        }
+
+        .range-slider::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            appearance: none;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            background: var(--color-primary);
+            box-shadow: 0 0 10px var(--color-primary);
+            cursor: pointer;
+            transition: transform 0.1s ease;
+        }
+
+        .range-slider::-webkit-slider-thumb:hover {
+            transform: scale(1.2);
+        }
+
+        /* Telemetry Panel */
+        .telemetry-list {
+            margin-top: 1.5rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.75rem;
+        }
+
+        .telemetry-item {
+            display: flex;
+            justify-content: space-between;
+            font-size: 0.85rem;
+            padding-bottom: 0.5rem;
+            border-bottom: 1px dashed rgba(255, 255, 255, 0.03);
+        }
+
+        .telemetry-label {
+            color: var(--color-text-muted);
+        }
+
+        .telemetry-value {
+            font-family: monospace;
+            font-weight: 600;
+            color: var(--color-text);
+        }
+
+        .telemetry-value.highlight {
+            color: var(--color-primary);
+        }
+
+        /* Display Arena */
+        .display-arena {
+            display: flex;
+            flex-direction: column;
+            gap: 1.5rem;
+        }
+
+        .workspace-card {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            min-height: 450px;
+        }
+
+        .viewport-container {
+            flex: 1;
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1.5rem;
+            min-height: 380px;
+        }
+
+        @media (max-width: 768px) {
+            .viewport-container {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .viewport {
+            background: rgba(0, 0, 0, 0.4);
+            border-radius: 12px;
+            border: 1px solid rgba(255, 255, 255, 0.03);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            overflow: hidden;
+            position: relative;
+            padding: 1rem;
+        }
+
+        .viewport-title {
+            position: absolute;
+            top: 12px;
+            left: 12px;
+            background: rgba(9, 10, 15, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.08);
+            padding: 4px 10px;
+            border-radius: 20px;
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--color-primary);
+            letter-spacing: 0.05em;
+            text-transform: uppercase;
+            z-index: 10;
+        }
+
+        .preview-img, .result-canvas {
+            max-width: 100%;
+            max-height: 350px;
+            object-fit: contain;
+            border-radius: 8px;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.5);
+            display: none;
+        }
+
+        .placeholder-text {
+            color: var(--color-text-muted);
+            font-size: 0.9rem;
+            text-align: center;
+            max-width: 250px;
+            line-height: 1.4;
+        }
+
+        /* Overlay options */
+        .option-tabs {
+            display: flex;
+            gap: 0.5rem;
+            margin-top: 1rem;
+        }
+
+        .option-tab {
+            flex: 1;
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid rgba(255, 255, 255, 0.06);
+            color: var(--color-text-muted);
+            padding: 0.5rem;
+            border-radius: 8px;
+            font-size: 0.85rem;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+            text-align: center;
+        }
+
+        .option-tab.active {
+            background: rgba(0, 240, 255, 0.08);
+            border-color: var(--color-primary);
+            color: var(--color-primary);
+        }
+
+        /* Status Toast */
+        .toast {
+            position: fixed;
+            bottom: 24px;
+            right: 24px;
+            background: #181c2b;
+            border-left: 4px solid var(--color-primary);
+            padding: 1rem 1.5rem;
+            border-radius: 0 8px 8px 0;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+            transform: translateY(150%);
+            transition: transform 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+            z-index: 999;
+        }
+
+        .toast.show {
+            transform: translateY(0);
+        }
+
+        .toast-title {
+            font-size: 0.85rem;
+            font-weight: 600;
+            color: white;
+            margin-bottom: 0.15rem;
+        }
+
+        .toast-body {
+            font-size: 0.75rem;
+            color: var(--color-text-muted);
+        }
+
+        /* Console log container */
+        .console-container {
+            margin-top: 1.5rem;
+        }
+        
+        .console-body {
+            background: rgba(0,0,0,0.6);
+            border: 1px solid rgba(255,255,255,0.05);
+            border-radius: 8px;
+            height: 120px;
+            font-family: 'Courier New', Courier, monospace;
+            font-size: 0.75rem;
+            padding: 0.75rem;
+            overflow-y: auto;
+            color: #00ff66;
+            line-height: 1.4;
+        }
+
+        /* Example Image Link */
+        .example-link-wrapper {
+            margin-top: 0.75rem;
+            text-align: center;
+        }
+
+        .example-link-btn {
+            background: transparent;
+            border: none;
+            color: var(--color-primary);
+            font-size: 0.8rem;
+            font-weight: 500;
+            cursor: pointer;
+            text-decoration: underline;
+            opacity: 0.8;
+            transition: opacity 0.2s ease;
+        }
+
+        .example-link-btn:hover {
+            opacity: 1;
+        }
+    </style>
+</head>
+<body>
+
+    <header>
+        <h1>VGGT-&Omega; Sky Segmentation</h1>
+        <p class="subtitle">Client-side WebGPU acceleration using ONNX Runtime Web. Upload any image to isolate and segment the sky in real-time.</p>
+    </header>
+
+    <main>
+        <!-- Sidebar controls -->
+        <div class="display-arena" style="display: flex; flex-direction: column; gap: 1.5rem;">
+            
+            <section class="glass-card">
+                <h2 class="panel-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"></rect><rect x="2" y="14" width="20" height="8" rx="2" ry="2"></rect><line x1="6" y1="6" x2="6.01" y2="6"></line><line x1="6" y1="18" x2="6.01" y2="18"></line></svg>
+                    Configuration
+                </h2>
+                
+                <div class="form-group">
+                    <label>Inference Provider</label>
+                    <div class="select-btn-group">
+                        <button class="select-btn active" id="provider-webgpu">WebGPU</button>
+                        <button class="select-btn" id="provider-wasm">WASM CPU</button>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 1.5rem;">
+                    <button class="btn-primary" id="load-model-btn">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path><polyline points="7 10 12 15 17 10"></polyline><line x1="12" y1="15" x2="12" y2="3"></line></svg>
+                        Load Model (176MB)
+                    </button>
+                    
+                    <div class="progress-wrapper" id="progress-wrapper">
+                        <div class="progress-bar-bg">
+                            <div class="progress-bar-fill" id="progress-bar-fill"></div>
+                        </div>
+                        <div class="progress-info">
+                            <span id="progress-text">Downloading...</span>
+                            <span id="progress-percent">0%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin-top: 1.5rem;">
+                    <label>Input Image</label>
+                    <div class="upload-container" id="drop-zone">
+                        <div class="upload-icon">
+                            <svg width="36" height="36" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><circle cx="8.5" cy="8.5" r="1.5"></circle><polyline points="21 15 16 10 5 21"></polyline></svg>
+                        </div>
+                        <p class="upload-text">Drag & drop image here or <span>browse</span></p>
+                        <input type="file" class="upload-input" id="file-input" accept="image/*">
+                    </div>
+                    <div class="example-link-wrapper">
+                        <button class="example-link-btn" id="load-example-btn">Load local Pinecone frame</button>
+                    </div>
+                </div>
+
+                <button class="btn-primary" id="run-btn" disabled style="background: linear-gradient(135deg, var(--color-success) 0%, #00bbff 100%); color: #000; box-shadow: 0 4px 15px rgba(0, 255, 102, 0.15); margin-top: 1.5rem;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    Run Sky Segmentation
+                </button>
+            </section>
+
+            <section class="glass-card">
+                <h2 class="panel-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="20" x2="18" y2="10"></line><line x1="12" y1="20" x2="12" y2="4"></line><line x1="6" y1="20" x2="6" y2="14"></line><line x1="2" y1="20" x2="22" y2="20"></line></svg>
+                    Performance Metrics
+                </h2>
+                <div class="telemetry-list">
+                    <div class="telemetry-item">
+                        <span class="telemetry-label">Active Provider</span>
+                        <span class="telemetry-value" id="metric-provider">None</span>
+                    </div>
+                    <div class="telemetry-item">
+                        <span class="telemetry-label">Model Load Time</span>
+                        <span class="telemetry-value" id="metric-load-time">-</span>
+                    </div>
+                    <div class="telemetry-item">
+                        <span class="telemetry-label">Preprocessing</span>
+                        <span class="telemetry-value" id="metric-pre-time">-</span>
+                    </div>
+                    <div class="telemetry-item">
+                        <span class="telemetry-label">Inference Time</span>
+                        <span class="telemetry-value highlight" id="metric-inf-time">-</span>
+                    </div>
+                    <div class="telemetry-item">
+                        <span class="telemetry-label">Postprocessing</span>
+                        <span class="telemetry-value" id="metric-post-time">-</span>
+                    </div>
+                    <div class="telemetry-item" style="border-bottom: none;">
+                        <span class="telemetry-label">Total Time</span>
+                        <span class="telemetry-value" id="metric-total-time">-</span>
+                    </div>
+                </div>
+            </section>
+        </div>
+
+        <!-- Main Display viewport -->
+        <div class="display-arena">
+            <div class="glass-card workspace-card">
+                <h2 class="panel-title">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2.247a10 10 0 0 0-3 1.83l2.88 2.88a3 3 0 0 1 3-.3M12 21.753a10 10 0 0 0 3-1.83l-2.88-2.88a3 3 0 0 1-3 .3M2.247 12a10 10 0 0 0 1.83 3l2.88-2.88a3 3 0 0 1-.3-3M21.753 12a10 10 0 0 0-1.83-3l-2.88 2.88a3 3 0 0 1 .3 3"></path></svg>
+                    Interactive Output Workspace
+                </h2>
+
+                <div class="viewport-container">
+                    <!-- Viewport Left: Source Image -->
+                    <div class="viewport" id="viewport-left">
+                        <div class="viewport-title">Source Frame</div>
+                        <div class="placeholder-text" id="placeholder-src">
+                            Upload an image or load the local Pinecone frame to visualize.
+                        </div>
+                        <img class="preview-img" id="src-preview" alt="Source preview">
+                    </div>
+
+                    <!-- Viewport Right: Seg Mask Overlay -->
+                    <div class="viewport" id="viewport-right">
+                        <div class="viewport-title">Segmentation Canvas</div>
+                        <div class="placeholder-text" id="placeholder-dst">
+                            Run inference to overlay the extracted sky mask.
+                        </div>
+                        <canvas class="result-canvas" id="result-canvas"></canvas>
+                    </div>
+                </div>
+
+                <!-- Slider and Output View Mode toggles -->
+                <div style="margin-top: 1.5rem;">
+                    <div class="slider-container">
+                        <div class="slider-header">
+                            <span>Overlay Opacity</span>
+                            <span id="opacity-value">50%</span>
+                        </div>
+                        <input type="range" class="range-slider" id="opacity-slider" min="0" max="100" value="50">
+                    </div>
+
+                    <div class="form-group" style="margin-top: 1rem;">
+                        <label>Visualization Mode</label>
+                        <div class="option-tabs">
+                            <div class="option-tab active" data-mode="overlay">Mask Overlay</div>
+                            <div class="option-tab" data-mode="binary">Binary Mask</div>
+                            <div class="option-tab" data-mode="original">Original Image</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Developer Log console -->
+            <div class="console-container">
+                <div class="console-body" id="console-log">
+                    [System] App initialized. Ready to load skyseg.onnx.
+                </div>
+            </div>
+        </div>
+    </main>
+
+    <div class="toast" id="toast-notify">
+        <div class="toast-icon">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="#00f0ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"></circle><line x1="12" y1="16" x2="12" y2="12"></line><line x1="12" y1="8" x2="12.01" y2="8"></line></svg>
+        </div>
+        <div>
+            <div class="toast-title" id="toast-title">Notification</div>
+            <div class="toast-body" id="toast-body">Message contents...</div>
+        </div>
+    </div>
+
+    <script>
+        // Global State variables
+        let selectedProvider = 'webgpu';
+        let ortSession = null;
+        let originalImage = null;
+        let rawMaskData = null; // Uint8Array [320, 320]
+        let currentMode = 'overlay'; // overlay, binary, original
+        let overlayOpacity = 0.5;
+
+        // Elements
+        const providerWebgpu = document.getElementById('provider-webgpu');
+        const providerWasm = document.getElementById('provider-wasm');
+        const loadModelBtn = document.getElementById('load-model-btn');
+        const progressWrapper = document.getElementById('progress-wrapper');
+        const progressBarFill = document.getElementById('progress-bar-fill');
+        const progressText = document.getElementById('progress-text');
+        const progressPercent = document.getElementById('progress-percent');
+        const dropZone = document.getElementById('drop-zone');
+        const fileInput = document.getElementById('file-input');
+        const runBtn = document.getElementById('run-btn');
+        const loadExampleBtn = document.getElementById('load-example-btn');
+        
+        const srcPreview = document.getElementById('src-preview');
+        const placeholderSrc = document.getElementById('placeholder-src');
+        const resultCanvas = document.getElementById('result-canvas');
+        const placeholderDst = document.getElementById('placeholder-dst');
+        
+        const opacitySlider = document.getElementById('opacity-slider');
+        const opacityValue = document.getElementById('opacity-value');
+        const consoleLog = document.getElementById('console-log');
+        
+        const metricProvider = document.getElementById('metric-provider');
+        const metricLoadTime = document.getElementById('metric-load-time');
+        const metricPreTime = document.getElementById('metric-pre-time');
+        const metricInfTime = document.getElementById('metric-inf-time');
+        const metricPostTime = document.getElementById('metric-post-time');
+        const metricTotalTime = document.getElementById('metric-total-time');
+
+        // Logging helper
+        function log(msg) {
+            console.log(msg);
+            const time = new Date().toLocaleTimeString();
+            consoleLog.innerHTML += `<br>[${time}] ${msg}`;
+            consoleLog.scrollTop = consoleLog.scrollHeight;
+        }
+
+        // Show Toast helper
+        function showToast(title, body) {
+            const toast = document.getElementById('toast-notify');
+            document.getElementById('toast-title').innerText = title;
+            document.getElementById('toast-body').innerText = body;
+            toast.classList.add('show');
+            setTimeout(() => {
+                toast.classList.remove('show');
+            }, 4000);
+        }
+
+        // Check WebGPU availability on page load
+        window.addEventListener('load', () => {
+            if (!navigator.gpu) {
+                log("WARNING: WebGPU is not supported on this browser. Falling back to WASM.");
+                providerWebgpu.disabled = true;
+                providerWebgpu.classList.remove('active');
+                providerWasm.classList.add('active');
+                selectedProvider = 'wasm';
+                metricProvider.innerText = "WASM CPU (Fallback)";
+            } else {
+                log("WebGPU detected and ready.");
+                metricProvider.innerText = "WebGPU (Ready)";
+            }
+        });
+
+        // Provider Selector click events
+        providerWebgpu.addEventListener('click', () => {
+            if (!navigator.gpu) return;
+            providerWasm.classList.remove('active');
+            providerWebgpu.classList.add('active');
+            selectedProvider = 'webgpu';
+            log("Execution provider switched to WebGPU");
+        });
+
+        providerWasm.addEventListener('click', () => {
+            providerWebgpu.classList.remove('active');
+            providerWasm.classList.add('active');
+            selectedProvider = 'wasm';
+            log("Execution provider switched to WASM CPU");
+        });
+
+        // Progress-aware file downloader
+        async function downloadModel(url) {
+            const response = await fetch(url);
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            
+            const contentLength = response.headers.get('content-length');
+            if (!contentLength) {
+                throw new Error("Content-Length header is missing, unable to track progress.");
+            }
+            
+            const totalBytes = parseInt(contentLength, 10);
+            let loadedBytes = 0;
+            const reader = response.body.getReader();
+            const chunks = [];
+            
+            const startTime = performance.now();
+            
+            while (true) {
+                const { done, value } = await reader.read();
+                if (done) break;
+                
+                chunks.push(value);
+                loadedBytes += value.length;
+                
+                const percentage = Math.round((loadedBytes / totalBytes) * 100);
+                progressBarFill.style.width = `${percentage}%`;
+                progressPercent.innerText = `${percentage}%`;
+                
+                const elapsed = (performance.now() - startTime) / 1000;
+                const speed = loadedBytes / 1024 / 1024 / elapsed; // MB/s
+                progressText.innerText = `Downloading: ${(loadedBytes / 1024 / 1024).toFixed(1)}MB / ${(totalBytes / 1024 / 1024).toFixed(1)}MB (${speed.toFixed(1)} MB/s)`;
+            }
+            
+            log("Download finished. Allocating buffer...");
+            const modelBuffer = new Uint8Array(totalBytes);
+            let offset = 0;
+            for (const chunk of chunks) {
+                modelBuffer.set(chunk, offset);
+                offset += chunk.length;
+            }
+            return modelBuffer.buffer;
+        }
+
+        // Load Model handler
+        loadModelBtn.addEventListener('click', async () => {
+            loadModelBtn.disabled = true;
+            progressWrapper.style.display = 'block';
+            progressBarFill.style.width = '0%';
+            progressPercent.innerText = '0%';
+            
+            const modelUrl = 'https://huggingface.co/JianyuanWang/skyseg/resolve/main/skyseg.onnx';
+            log(`Starting download of skyseg.onnx...`);
+            
+            const t0 = performance.now();
+            try {
+                const arrayBuffer = await downloadModel(modelUrl);
+                
+                log("Initializing ONNX Runtime Web session...");
+                progressText.innerText = "Compiling shaders & initializing session...";
+                
+                // Configure WASM paths
+                ort.env.wasm.wasmPaths = 'https://cdn.jsdelivr.net/npm/onnxruntime-web/dist/';
+                
+                const sessionOptions = {
+                    executionProviders: selectedProvider === 'webgpu' ? ['webgpu', 'wasm'] : ['wasm']
+                };
+                
+                ortSession = await ort.InferenceSession.create(arrayBuffer, sessionOptions);
+                const loadTime = ((performance.now() - t0) / 1000).toFixed(2);
+                
+                log(`Session created successfully using ${selectedProvider.toUpperCase()} execution provider.`);
+                metricLoadTime.innerText = `${loadTime} s`;
+                metricProvider.innerText = selectedProvider.toUpperCase();
+                showToast("Model Loaded", `Model compiled on ${selectedProvider.toUpperCase()} in ${loadTime}s`);
+                
+                progressText.innerText = "Model successfully loaded.";
+                loadModelBtn.innerText = "Model Loaded";
+                loadModelBtn.style.background = "rgba(0, 255, 102, 0.2)";
+                loadModelBtn.style.border = "1px solid var(--color-success)";
+                loadModelBtn.style.color = "var(--color-success)";
+                
+                if (originalImage) {
+                    runBtn.disabled = false;
+                }
+            } catch (err) {
+                log(`ERROR loading model: ${err.message}`);
+                showToast("Model Load Failed", err.message);
+                loadModelBtn.disabled = false;
+                progressText.innerText = "Error loading model.";
+            }
+        });
+
+        // Image Drop Zone handlers
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('image/')) {
+                loadImage(file);
+            }
+        });
+
+        fileInput.addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (file) {
+                loadImage(file);
+            }
+        });
+
+        // Load specific image
+        function loadImage(fileOrUrl) {
+            const reader = new FileReader();
+            
+            const img = new Image();
+            img.onload = function() {
+                originalImage = img;
+                srcPreview.src = img.src;
+                srcPreview.style.display = 'block';
+                placeholderSrc.style.display = 'none';
+                
+                // Clear output canvas
+                resultCanvas.style.display = 'none';
+                placeholderDst.style.display = 'block';
+                rawMaskData = null;
+                
+                log(`Loaded image: ${img.width}x${img.height} pixels.`);
+                
+                if (ortSession) {
+                    runBtn.disabled = false;
+                }
+            };
+
+            if (fileOrUrl instanceof File) {
+                reader.onload = function(e) {
+                    img.src = e.target.result;
+                };
+                reader.readAsDataURL(fileOrUrl);
+            } else {
+                img.src = fileOrUrl;
+            }
+        }
+
+        // Load local Pinecone example frame
+        loadExampleBtn.addEventListener('click', () => {
+            // Point to local server hosting path or relative path
+            const pineconeFrameUrl = './nerf_real_360/pinecone/images/IMG_7238.JPG';
+            log("Loading example pinecone image frame...");
+            loadImage(pineconeFrameUrl);
+        });
+
+        // Image Preprocessing: Resize to 320x320, normalize, and format to Planar Float32 tensor
+        function preprocess(image, targetWidth, targetHeight) {
+            const tempCanvas = document.createElement('canvas');
+            tempCanvas.width = targetWidth;
+            tempCanvas.height = targetHeight;
+            const ctx = tempCanvas.getContext('2d');
+            ctx.drawImage(image, 0, 0, targetWidth, targetHeight);
+            
+            const imageData = ctx.getImageData(0, 0, targetWidth, targetHeight);
+            const { data } = imageData; // RGBA
+            
+            const floatData = new Float32Array(targetWidth * targetHeight * 3);
+            
+            // ImageNet Normalization Constants
+            const mean = [0.485, 0.456, 0.406];
+            const std = [0.229, 0.224, 0.225];
+            
+            const channelStride = targetWidth * targetHeight;
+            
+            for (let i = 0; i < channelStride; i++) {
+                const r = data[i * 4] / 255.0;
+                const g = data[i * 4 + 1] / 255.0;
+                const b = data[i * 4 + 2] / 255.0;
+                
+                // Transpose to Planar Channels: RRRRR... GGGGG... BBBBB...
+                floatData[i] = (r - mean[0]) / std[0];
+                floatData[i + channelStride] = (g - mean[1]) / std[1];
+                floatData[i + channelStride * 2] = (b - mean[2]) / std[2];
+            }
+            
+            return new ort.Tensor('float32', floatData, [1, 3, targetHeight, targetWidth]);
+        }
+
+        // Model Execution & Postprocessing
+        runBtn.addEventListener('click', async () => {
+            if (!ortSession || !originalImage) return;
+            
+            runBtn.disabled = true;
+            runBtn.innerText = "Running Segmenter...";
+            log("Running pre-processing...");
+            
+            const tTotal0 = performance.now();
+            
+            // 1. Preprocessing
+            const tPre0 = performance.now();
+            const inputTensor = preprocess(originalImage, 320, 320);
+            const tPre = (performance.now() - tPre0).toFixed(1);
+            metricPreTime.innerText = `${tPre} ms`;
+            log(`Preprocessed input image in ${tPre} ms.`);
+            
+            // 2. Inference
+            log("Running model inference (WebGPU accelerated)...");
+            const tInf0 = performance.now();
+            try {
+                const inputName = ortSession.inputNames[0];
+                const outputName = ortSession.outputNames[0];
+                const inputs = { [inputName]: inputTensor };
+                
+                const outputs = await ortSession.run(inputs);
+                const outputTensor = outputs[outputName];
+                
+                const tInf = (performance.now() - tInf0).toFixed(1);
+                metricInfTime.innerText = `${tInf} ms`;
+                log(`Inference execution completed in ${tInf} ms.`);
+                
+                // 3. Postprocessing
+                const tPost0 = performance.now();
+                const outData = outputTensor.data; // Size is 1 * 1 * 320 * 320
+                
+                // Squeeze to 320x320 and find min/max values
+                let min = Infinity;
+                let max = -Infinity;
+                const size = 320 * 320;
+                
+                for (let i = 0; i < size; i++) {
+                    const val = outData[i];
+                    if (val < min) min = val;
+                    if (val > max) max = val;
+                }
+                
+                rawMaskData = new Uint8Array(size);
+                const diff = max - min;
+                
+                for (let i = 0; i < size; i++) {
+                    let normVal = 0;
+                    if (diff > 0) {
+                        normVal = ((outData[i] - min) / diff) * 255;
+                    }
+                    
+                    // In Python: output_mask[result_map < 32] = 255. 
+                    // This means values < 32 denote the sky region.
+                    if (normVal < 32) {
+                        rawMaskData[i] = 255; // Sky
+                    } else {
+                        rawMaskData[i] = 0; // Ground/Objects
+                    }
+                }
+                
+                const tPost = (performance.now() - tPost0).toFixed(1);
+                metricPostTime.innerText = `${tPost} ms`;
+                log(`Postprocessing completed in ${tPost} ms.`);
+                
+                const tTotal = (performance.now() - tTotal0).toFixed(1);
+                metricTotalTime.innerText = `${tTotal} ms`;
+                
+                // Render Canvas
+                renderResult();
+                showToast("Segmentation Success", `Completed in ${tTotal}ms`);
+            } catch (err) {
+                log(`ERROR running inference: ${err.message}`);
+                showToast("Inference Failed", err.message);
+            }
+            
+            runBtn.disabled = false;
+            runBtn.innerHTML = `
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                Run Sky Segmentation
+            `;
+        });
+
+        // Overlay Opacity slider change
+        opacitySlider.addEventListener('input', (e) => {
+            const percent = e.target.value;
+            opacityValue.innerText = `${percent}%`;
+            overlayOpacity = percent / 100;
+            if (rawMaskData) {
+                renderResult();
+            }
+        });
+
+        // Toggle visualization modes
+        const optionTabs = document.querySelectorAll('.option-tab');
+        optionTabs.forEach(tab => {
+            tab.addEventListener('click', () => {
+                optionTabs.forEach(t => t.classList.remove('active'));
+                tab.classList.add('active');
+                currentMode = tab.dataset.mode;
+                if (rawMaskData) {
+                    renderResult();
+                }
+            });
+        });
+
+        // Render Canvas with Mask Overlay
+        function renderResult() {
+            if (!originalImage || !rawMaskData) return;
+            
+            placeholderDst.style.display = 'none';
+            resultCanvas.style.display = 'block';
+            
+            const w = originalImage.width;
+            const h = originalImage.height;
+            resultCanvas.width = w;
+            resultCanvas.height = h;
+            
+            const ctx = resultCanvas.getContext('2d');
+            ctx.drawImage(originalImage, 0, 0, w, h);
+            
+            if (currentMode === 'original') return;
+            
+            // Create a temporary canvas to draw the 320x320 mask
+            const maskCanvas = document.createElement('canvas');
+            maskCanvas.width = 320;
+            maskCanvas.height = 320;
+            const mCtx = maskCanvas.getContext('2d');
+            
+            const mImgData = mCtx.createImageData(320, 320);
+            const mData = mImgData.data;
+            
+            for (let i = 0; i < 320 * 320; i++) {
+                const isSky = rawMaskData[i] === 255;
+                
+                if (currentMode === 'binary') {
+                    const color = isSky ? 255 : 0;
+                    mData[i * 4] = color;     // R
+                    mData[i * 4 + 1] = color; // G
+                    mData[i * 4 + 2] = color; // B
+                    mData[i * 4 + 3] = 255;   // A (opaque)
+                } else if (currentMode === 'overlay') {
+                    // Semitransparent Overlay (Deep Neon Cyan/Blue overlay for Sky)
+                    if (isSky) {
+                        mData[i * 4] = 0;       // R (0)
+                        mData[i * 4 + 1] = 240; // G (240)
+                        mData[i * 4 + 2] = 255; // B (255)
+                        mData[i * 4 + 3] = 255; // A (opaque inside temporary canvas)
+                    } else {
+                        mData[i * 4] = 0;
+                        mData[i * 4 + 1] = 0;
+                        mData[i * 4 + 2] = 0;
+                        mData[i * 4 + 3] = 0; // transparent
+                    }
+                }
+            }
+            
+            mCtx.putImageData(mImgData, 0, 0);
+            
+            // Composite mask onto the original canvas
+            if (currentMode === 'binary') {
+                ctx.drawImage(maskCanvas, 0, 0, w, h);
+            } else if (currentMode === 'overlay') {
+                ctx.save();
+                ctx.globalAlpha = overlayOpacity;
+                ctx.drawImage(maskCanvas, 0, 0, w, h);
+                ctx.restore();
+            }
+        }
+    </script>
+</body>
+</html>

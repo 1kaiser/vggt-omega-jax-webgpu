@@ -130,7 +130,7 @@ download_file(
 
 # %%
 image_dir = "nerf_real_360/pinecone/images"
-image_paths = sorted(glob.glob(os.path.join(image_dir, "*")))[:2]
+image_paths = sorted(glob.glob(os.path.join(image_dir, "*")))[:8]
 print("Loading images:")
 for p in image_paths:
     print(f"  - {os.path.basename(p)}")
@@ -243,9 +243,13 @@ else:
 # ## 5. Visualize Results
 
 # %%
-fig, axes = plt.subplots(2, 4, figsize=(18, 9))
+num_plot_frames = min(4, len(image_paths))
+fig, axes = plt.subplots(num_plot_frames, 4, figsize=(18, 4.5 * num_plot_frames))
 
-for i in range(2):
+if num_plot_frames == 1:
+    axes = np.expand_dims(axes, axis=0)
+
+for i in range(num_plot_frames):
     # Original Image
     img_np = (x_jax[0, i] * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])).clip(0, 1)
     axes[i, 0].imshow(img_np)
@@ -271,7 +275,7 @@ for i in range(2):
     axes[i, 3].axis("off")
     fig.colorbar(im_diff, ax=axes[i, 3], fraction=0.046, pad=0.04)
 
-plt.suptitle("PyTorch vs JAX Depth Comparison on Pinecone Dataset", fontsize=16)
+plt.suptitle(f"PyTorch vs JAX Depth Comparison on Pinecone Dataset (First {num_plot_frames} Frames)", fontsize=16)
 plt.tight_layout()
 plt.savefig("parity_comparison.png", dpi=150)
 plt.show()
@@ -359,8 +363,8 @@ def process_run(world_points, extrinsics, confidence, colors):
         flat_points = flat_points[mask]
         flat_colors = flat_colors[mask]
         
-    if len(flat_points) > 5000:
-        idx = np.random.choice(len(flat_points), 5000, replace=False)
+    if len(flat_points) > 10000:
+        idx = np.random.choice(len(flat_points), 10000, replace=False)
         flat_points = flat_points[idx]
         flat_colors = flat_colors[idx]
         
@@ -377,17 +381,20 @@ views = [
     ("Front View (X vs Y)", 0, 1, "X (Left-Right)", "Y (Up-Down)", True)
 ]
 
+T = len(pt_cams)
+cmap_cam = plt.cm.rainbow(np.linspace(0, 1, T))
+
 for row, (view_title, d1, d2, l1, l2, inv_y) in enumerate(views):
     # PyTorch Column
     ax_pt = axes[row, 0]
     ax_pt.scatter(pt_pts[:, d1], pt_pts[:, d2], c=pt_clrs, s=2, alpha=0.6)
     
-    colors_cam = ["green", "red"]
-    for idx in range(len(pt_cams)):
+    for idx in range(T):
         c_pos = pt_cams[idx]
         c_dir = pt_dirs[idx]
-        ax_pt.scatter(c_pos[d1], c_pos[d2], c=colors_cam[idx], marker="^", s=100, edgecolors="black", label=f"Camera {idx}" if row==0 else "")
-        ax_pt.plot([c_pos[d1], c_pos[d1] + 0.15 * c_dir[d1]], [c_pos[d2], c_pos[d2] + 0.15 * c_dir[d2]], color=colors_cam[idx], linewidth=2)
+        c_color = cmap_cam[idx]
+        ax_pt.scatter(c_pos[d1], c_pos[d2], color=c_color, marker="^", s=100, edgecolors="black", label=f"Camera {idx}" if row==0 else "")
+        ax_pt.plot([c_pos[d1], c_pos[d1] + 0.15 * c_dir[d1]], [c_pos[d2], c_pos[d2] + 0.15 * c_dir[d2]], color=c_color, linewidth=2)
         
     ax_pt.set_title(f"PyTorch - {view_title}", fontsize=12, fontweight="bold")
     ax_pt.set_xlabel(l1)
@@ -402,11 +409,12 @@ for row, (view_title, d1, d2, l1, l2, inv_y) in enumerate(views):
     ax_jax = axes[row, 1]
     ax_jax.scatter(jax_pts[:, d1], jax_pts[:, d2], c=jax_clrs, s=2, alpha=0.6)
     
-    for idx in range(len(jax_cams)):
+    for idx in range(T):
         c_pos = jax_cams[idx]
         c_dir = jax_dirs[idx]
-        ax_jax.scatter(c_pos[d1], c_pos[d2], c=colors_cam[idx], marker="^", s=100, edgecolors="black", label=f"Camera {idx}" if row==0 else "")
-        ax_jax.plot([c_pos[d1], c_pos[d1] + 0.15 * c_dir[d1]], [c_pos[d2], c_pos[d2] + 0.15 * c_dir[d2]], color=colors_cam[idx], linewidth=2)
+        c_color = cmap_cam[idx]
+        ax_jax.scatter(c_pos[d1], c_pos[d2], color=c_color, marker="^", s=100, edgecolors="black", label=f"Camera {idx}" if row==0 else "")
+        ax_jax.plot([c_pos[d1], c_pos[d1] + 0.15 * c_dir[d1]], [c_pos[d2], c_pos[d2] + 0.15 * c_dir[d2]], color=c_color, linewidth=2)
         
     ax_jax.set_title(f"JAX - {view_title}", fontsize=12, fontweight="bold")
     ax_jax.set_xlabel(l1)
