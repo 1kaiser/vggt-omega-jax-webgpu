@@ -16,3 +16,6 @@ skyseg.onnx.tmp
 *.pt
 *.pth
 *.safetensors
+*.zst
+nerf_real_360.zip
+nerf_real_360/

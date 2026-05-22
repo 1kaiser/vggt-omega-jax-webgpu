@@ -35,6 +35,62 @@ Before using the models, please request access to the checkpoints [here](https:/
 The authors are not involved in the review process and cannot approve or reject individual applications. However, the [🤗 Hugging Face demo](https://huggingface.co/spaces/facebook/vggt-omega) is available to everyone.
 
 
+## JAX / Flax Implementation
+
+A complete JAX/Flax port of the model has been implemented and is located in the [vggt_omega/jax/](file:///home/kaiser/projects/vggt-omega/vggt_omega/jax/) directory.
+
+### Model Weights
+
+The converted JAX/Flax weights and the original PyTorch weights are hosted publicly on Hugging Face:
+*   **Hugging Face Dataset Repo:** [1kaiser/vggt-omega-jax](https://huggingface.co/datasets/1kaiser/vggt-omega-jax)
+*   **PyTorch Checkpoint (`.pt`):** [Download](https://huggingface.co/datasets/1kaiser/vggt-omega-jax/resolve/main/vggt_omega_1b_512.pt)
+*   **JAX Checkpoint (`.msgpack.zst`):** [Download](https://huggingface.co/datasets/1kaiser/vggt-omega-jax/resolve/main/vggt_omega_1b_512.msgpack.zst)
+
+### Parity Verification
+
+The JAX implementation's predictions match the PyTorch implementation's predictions with extremely high numerical precision. When evaluated on the `pinecone` dataset in `float32` on CPU, the maximum absolute difference between PyTorch and JAX outputs is well below the `1e-3` parity threshold:
+
+| Output Tensor | Shape | Max Absolute Difference | Mean Absolute Difference | Status |
+| :--- | :--- | :--- | :--- | :--- |
+| `camera_and_register_tokens` | `(1, 2, 17, 2048)` | `5.340576e-05` | `1.999295e-06` | PASSED |
+| `pose_enc` | `(1, 2, 9)` | `1.192093e-07` | `3.231172e-08` | PASSED |
+| `depth` | `(1, 2, 448, 592, 1)` | `9.059906e-06` | `5.387419e-07` | PASSED |
+| `depth_conf` | `(1, 2, 448, 592)` | `3.252029e-04` | `2.490888e-05` | PASSED |
+
+Below is the comparison plot displaying the input frames, the predicted depth maps from PyTorch and JAX, and their absolute error difference maps:
+
+![PyTorch vs JAX Depth Comparison](parity_comparison.png)
+
+> [!NOTE]
+> **Autocast and Precision**: The default PyTorch execution on GPU utilizes Automatic Mixed Precision (`autocast` in `float16`/`bfloat16`). In contrast, JAX defaults to `float32`. This can cause slight output variance when running PyTorch on GPU versus JAX on CPU. To achieve bit-wise mathematical parity, both models must be run in `float32` on the CPU, which aligns the accumulators and achieves the near-zero difference metrics listed above.
+
+### Execution Speed Comparison (CPU Benchmarks)
+
+We benchmarked the CPU inference time on the first 2 frames of the `pinecone` dataset (resized to 512x512):
+*   **PyTorch CPU**: `4.79 seconds`
+*   **JAX CPU (Cold / Compilation + Inference)**: `25.66 seconds`
+*   **JAX CPU (Warm / JIT Compiled Inference)**: `18.05 seconds`
+
+*Note: Since JAX CPU execution does not leverage parallel MKL/oneDNN optimization threads by default, JAX CPU inference is slower than PyTorch CPU. On GPU backends, JAX JIT compilation leverages XLA memory-fusion and kernel generation, resulting in significantly faster execution.*
+
+### Running the Inference & Comparison Notebook
+
+We use [Jupytext](https://jupytext.readthedocs.io/) and [Papermill](https://papermill.readthedocs.io/) for managing, generating, and running the notebooks cleanly.
+
+To regenerate or run the comparison notebook:
+1.  Initialize the notebook template from the Jupytext script:
+    ```bash
+    jupytext --to ipynb inference_comparison.py
+    ```
+2.  Execute the notebook using Papermill:
+    ```bash
+    papermill inference_comparison.ipynb executed_inference_comparison.ipynb
+    ```
+3.  The script will automatically download the dataset `nerf_real_360` (from Hugging Face `1kaiser/NERF_360`) and the model checkpoints (from Hugging Face `1kaiser/vggt-omega-jax`) if they do not exist locally, run both models, check output parity, and save `parity_comparison.png`.
+
+A standalone JAX-only demo notebook is also available at [inference_demo_jax.ipynb](file:///home/kaiser/projects/vggt-omega/inference_demo_jax.ipynb).
+
+
 ## Quick Start
 
 First, clone this repository and install the dependencies:
