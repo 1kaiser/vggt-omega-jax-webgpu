@@ -61,6 +61,10 @@ Below is the comparison plot displaying the input frames, the predicted depth ma
 
 ![PyTorch vs JAX Depth Comparison](parity_comparison.png)
 
+Below is the 3D reconstruction multiview comparison (Top, Side, and Front orthographic views) showing the point clouds and predicted camera positions/directions for both PyTorch and JAX implementations:
+
+![PyTorch vs JAX 3D Reconstruction Comparison](views_comparison.png)
+
 > [!NOTE]
 > **Autocast and Precision**: The default PyTorch execution on GPU utilizes Automatic Mixed Precision (`autocast` in `float16`/`bfloat16`). In contrast, JAX defaults to `float32`. This can cause slight output variance when running PyTorch on GPU versus JAX on CPU. To achieve bit-wise mathematical parity, both models must be run in `float32` on the CPU, which aligns the accumulators and achieves the near-zero difference metrics listed above.
 
