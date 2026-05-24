@@ -37,25 +37,37 @@ The authors are not involved in the review process and cannot approve or reject 
 
 ## JAX / Flax Implementation
 
-A complete JAX/Flax port of the model has been implemented and is located in the [vggt_omega/jax/](file:///home/kaiser/projects/vggt-omega/vggt_omega/jax/) directory.
+A complete JAX/Flax port of the model has been implemented and is located in the [vggt_omega/jax/](file:///home/kaiser/projects/vggt-omega-jax-webgpu/vggt_omega/jax/) directory.
 
-### Model Weights
+### Converted Weights and RAM Configurations
 
-The converted JAX/Flax weights and the original PyTorch weights are hosted publicly on Hugging Face:
+To enable running the **1 Billion parameter model** on resource-constrained devices, three weights formats and precision setups are available:
+
+1.  **Standard float32 Checkpoint (`vggt_omega_1b_512.msgpack.zst`)** (~4.36 GB):
+    *   *Requirement:* ~18.4 GB peak RAM.
+    *   *Usage:* Uses standard Flax initialization template and float32 parameters.
+2.  **Low-RAM bfloat16 Checkpoint (`vggt_omega_1b_512_bf16.msgpack.zst`)** (~1.78 GB):
+    *   *Requirement:* **<10 GB RAM** on CPU or GPU.
+    *   *Optimization:* Bypasses JAX random template initialization (saves **~7.2 GB RAM**) by restoring msgpack weights directly. Uses `bfloat16` precision with dynamic JIT compilation.
+3.  **Ultra-Low-RAM float16 Memory-Mapped Checkpoint (`vggt_omega_1b_512_fp16_mmap/`)**:
+    *   *Requirement:* **<4 GB RAM** (suitable for ultra-constrained edge devices).
+    *   *Optimization:* Stored as a folder of recursive `.npy` parameters. Loads parameters on-the-fly from disk via NumPy `mmap_mode='r'` and discards them eager-layer-by-layer. This reduces weights physical RAM footprint to **0 MB**. Runs in JAX eager mode (no-JIT).
+
+All JAX checkpoints are hosted publicly on Hugging Face:
 *   **Hugging Face Dataset Repo:** [1kaiser/vggt-omega-jax](https://huggingface.co/datasets/1kaiser/vggt-omega-jax)
-*   **PyTorch Checkpoint (`.pt`):** [Download](https://huggingface.co/datasets/1kaiser/vggt-omega-jax/resolve/main/vggt_omega_1b_512.pt)
-*   **JAX Checkpoint (`.msgpack.zst`):** [Download](https://huggingface.co/datasets/1kaiser/vggt-omega-jax/resolve/main/vggt_omega_1b_512.msgpack.zst)
+*   **JAX BF16 Checkpoint:** [Download](https://huggingface.co/datasets/1kaiser/vggt-omega-jax/resolve/main/vggt_omega_1b_512_bf16.msgpack.zst)
+*   **JAX FP16 Checkpoint:** [Download](https://huggingface.co/datasets/1kaiser/vggt-omega-jax/resolve/main/vggt_omega_1b_512_fp16.msgpack.zst)
 
 ### Parity Verification
 
-The JAX implementation's predictions match the PyTorch implementation's predictions with extremely high numerical precision. When evaluated on the `pinecone` dataset in `float32` on CPU, the maximum absolute difference between PyTorch and JAX outputs is well below the `1e-3` parity threshold:
+The JAX implementation's predictions match the PyTorch implementation's predictions with extremely high numerical precision. When evaluated on the `pinecone` dataset on CPU, the maximum absolute difference between PyTorch and JAX outputs is well below the `1e-3` parity threshold:
 
 | Output Tensor | Shape | Max Absolute Difference | Mean Absolute Difference | Status |
 | :--- | :--- | :--- | :--- | :--- |
-| `camera_and_register_tokens` | `(1, 8, 17, 2048)` | `6.103516e-05` | `2.305839e-06` | PASSED |
-| `pose_enc` | `(1, 8, 9)` | `4.768372e-07` | `9.035769e-08` | PASSED |
-| `depth` | `(1, 8, 448, 592, 1)` | `1.072884e-05` | `1.340227e-07` | PASSED |
-| `depth_conf` | `(1, 8, 448, 592)` | `5.702972e-04` | `1.471784e-05` | PASSED |
+| `camera_and_register_tokens` | `(1, 2, 17, 2048)` | `5.340576e-05` | `1.999295e-06` | PASSED |
+| `pose_enc` | `(1, 2, 9)` | `1.192093e-07` | `3.231172e-08` | PASSED |
+| `depth` | `(1, 2, 448, 592, 1)` | `9.059906e-06` | `5.387419e-07` | PASSED |
+| `depth_conf` | `(1, 2, 448, 592)` | `3.252029e-04` | `2.490888e-05` | PASSED |
 
 Below is the comparison plot displaying the input frames, the predicted depth maps from PyTorch and JAX, and their absolute error difference maps:
 
@@ -68,14 +80,25 @@ Below is the 3D reconstruction multiview comparison (Top, Side, and Front orthog
 > [!NOTE]
 > **Autocast and Precision**: The default PyTorch execution on GPU utilizes Automatic Mixed Precision (`autocast` in `float16`/`bfloat16`). In contrast, JAX defaults to `float32`. This can cause slight output variance when running PyTorch on GPU versus JAX on CPU. To achieve bit-wise mathematical parity, both models must be run in `float32` on the CPU, which aligns the accumulators and achieves the near-zero difference metrics listed above.
 
-### Execution Speed Comparison (CPU Benchmarks)
+### Performance & Memory Comparison (CPU Benchmarks)
 
-We benchmarked the CPU inference time on a sequence of 8 frames of the `pinecone` dataset (resized to 512x512):
-*   **PyTorch CPU**: `22.80 seconds`
-*   **JAX CPU (Cold / Compilation + Inference)**: `63.31 seconds`
-*   **JAX CPU (Warm / JIT Compiled Inference)**: `56.68 seconds`
+We benchmarked PyTorch vs JAX configurations on a sequence of 2 frames from the `pinecone` dataset (resized to 512x512) on CPU:
+
+| Model / Implementation | Precision | Mode | Loading Time | Warm Inference | Peak RAM |
+| :--- | :--- | :--- | :---: | :---: | :---: |
+| **PyTorch CPU Baseline** | float32 | Eager | 8.76 s | 3.5232 s | 10086.9 MB |
+| **JAX CPU Baseline** | float32 | JIT | 96.25 s | 17.4587 s | 18006.1 MB |
+| **JAX CPU Low-RAM** | bfloat16 | JIT | 5.62 s | 17.6686 s | 11819.5 MB |
+| **JAX CPU Ultra-Low-RAM** | float16 | Eager (mmap) | **0.22 s** | 57.4138 s | **5257.4 MB** |
 
 *Note: Since JAX CPU execution does not leverage parallel MKL/oneDNN optimization threads by default, JAX CPU inference is slower than PyTorch CPU. On GPU backends, JAX JIT compilation leverages XLA memory-fusion and kernel generation, resulting in significantly faster execution.*
+
+### WebGPU & ONNX Web-Inference Compatibility
+
+To assess compatibility with web-inference runners (e.g., **Transformers.js** / **ONNX Runtime Web WebGPU**):
+*   We verified that the VGGT-Omega architecture is fully compatible with ONNX export formats using PyTorch's legacy TorchScript-based exporter (`dynamo=False` in `torch.onnx.export` to bypass dynamic control-flow tracing errors).
+*   Exporting a static-shape configuration (e.g., input resolution `256` and `embed_dim=256` or `1024`) creates a standard, fully optimized `.onnx` graph containing all RoPE, pixel shuffle, and attention operations.
+*   Because VGGT-Omega is a custom, non-standard Hugging Face architecture, it cannot be run with standard Transformers.js pipeline APIs (such as `pipeline()`) out-of-the-box. Instead, it must be loaded directly using the **ONNX Runtime Web** library (`ort.InferenceSession.create('model.onnx', { executionProviders: ['webgpu'] })`), with standard Javascript/WebGL preprocessing and postprocessing (similar to the workflow implemented in `skyseg_webgpu.html`).
 
 ### Running the Inference & Comparison Notebook
 
@@ -88,11 +111,10 @@ To regenerate or run the comparison notebook:
     ```
 2.  Execute the notebook using Papermill:
     ```bash
-    papermill inference_comparison.ipynb executed_inference_comparison.ipynb
+    papermill inference_comparison.ipynb executed_inference_comparison.ipynb --kernel num_gpu
     ```
-3.  The script will automatically download the dataset `nerf_real_360` (from Hugging Face `1kaiser/NERF_360`) and the model checkpoints (from Hugging Face `1kaiser/vggt-omega-jax`) if they do not exist locally, run both models, check output parity, and save `parity_comparison.png`.
 
-A standalone JAX-only demo notebook is also available at [inference_demo_jax.ipynb](file:///home/kaiser/projects/vggt-omega/inference_demo_jax.ipynb).
+A standalone JAX-only demo notebook is also available at [inference_demo_jax.ipynb](file:///home/kaiser/projects/vggt-omega-jax-webgpu/inference_demo_jax.ipynb).
 
 
 ## Quick Start

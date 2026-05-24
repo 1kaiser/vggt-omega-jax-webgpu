@@ -19,3 +19,8 @@ skyseg.onnx.tmp
 *.zst
 nerf_real_360.zip
 nerf_real_360/
+pinecone/
+vasedeck/
+*_preds.npz
+*_mmap/
+*.onnx

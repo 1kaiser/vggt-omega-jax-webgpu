@@ -1,11 +1,6 @@
-# Copyright (c) Meta Platforms, Inc. and affiliates.
-# All rights reserved.
-#
-# This source code is licensed under the license found in the
-# LICENSE file in the root directory of this source tree.
-
 import zstandard as zstd
 import flax.serialization
+import gc
 
 def load_checkpoint(params_template, filepath: str):
     """
@@ -13,7 +8,8 @@ def load_checkpoint(params_template, filepath: str):
     
     Args:
         params_template: A nested dictionary/template structure (e.g. from model.init)
-                        that matches the shape/keys of the saved parameters.
+                        that matches the shape/keys of the saved parameters, or None
+                        for direct template-free dictionary restoration.
         filepath: Path to the .msgpack.zst file.
         
     Returns:
@@ -25,6 +21,18 @@ def load_checkpoint(params_template, filepath: str):
     dctx = zstd.ZstdDecompressor()
     serialized_bytes = dctx.decompress(compressed_bytes)
     
-    # Restore the structure matching the template
-    restored = flax.serialization.from_bytes(params_template, serialized_bytes)
+    # Free compressed memory
+    del compressed_bytes
+    gc.collect()
+    
+    if params_template is None:
+        restored = flax.serialization.msgpack_restore(serialized_bytes)
+    else:
+        # Restore the structure matching the template
+        restored = flax.serialization.from_bytes(params_template, serialized_bytes)
+        
+    # Free serialized bytes memory
+    del serialized_bytes
+    gc.collect()
+    
     return restored

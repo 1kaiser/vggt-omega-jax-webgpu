@@ -59,7 +59,7 @@ def map_key(pt_key: str):
         
     return tuple(jax_parts)
 
-def convert_tensor(pt_tensor, jax_path):
+def convert_tensor(pt_tensor, jax_path, dtype_name='float32'):
     if isinstance(pt_tensor, torch.Tensor):
         val = pt_tensor.detach().cpu().float().numpy()
     else:
@@ -80,6 +80,12 @@ def convert_tensor(pt_tensor, jax_path):
                 # Conv2d weight: PT [O, I, H, W] -> JAX [H, W, I, O]
                 val = val.transpose(2, 3, 1, 0)
                 
+    if dtype_name == 'float16':
+        val = val.astype(np.float16)
+    elif dtype_name == 'bfloat16':
+        import ml_dtypes
+        val = val.astype(ml_dtypes.bfloat16)
+        
     return val
 
 def insert_at_path(d, path, value):
@@ -90,7 +96,7 @@ def insert_at_path(d, path, value):
         curr = curr[part]
     curr[path[-1]] = value
 
-def convert_weights(pt_path: str, output_path: str):
+def convert_weights(pt_path: str, output_path: str, dtype_name: str = 'float32'):
     print(f"Loading PyTorch checkpoint from {pt_path}...")
     state_dict = torch.load(pt_path, map_location="cpu")
     if "model" in state_dict:
@@ -108,13 +114,13 @@ def convert_weights(pt_path: str, output_path: str):
             pt_tensor = pt_tensor * state_dict[mask_key]
             
         jax_path = map_key(pt_key)
-        val = convert_tensor(pt_tensor, jax_path)
+        val = convert_tensor(pt_tensor, jax_path, dtype_name)
         insert_at_path(jax_params, jax_path, val)
         
     # Wrap in "params" structure expected by Flax
     wrapped_params = {"params": jax_params}
     
-    print("Serializing Flax parameters...")
+    print(f"Serializing Flax parameters (dtype: {dtype_name})...")
     serialized_bytes = flax.serialization.to_bytes(wrapped_params)
     
     print(f"Compressing parameters with zstd (original size: {len(serialized_bytes) / (1024*1024):.2f} MB)...")
@@ -132,6 +138,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Convert PyTorch VGGT-Omega weights to JAX/Flax msgpack format.")
     parser.add_argument("--pt-path", type=str, required=True, help="Path to PyTorch .pt checkpoint file.")
     parser.add_argument("--output-path", type=str, required=True, help="Path to output JAX .msgpack.zst file.")
+    parser.add_argument("--dtype", type=str, choices=["float32", "float16", "bfloat16"], default="float32", help="Target weight data type.")
     args = parser.parse_args()
     
-    convert_weights(args.pt_path, args.output_path)
+    convert_weights(args.pt_path, args.output_path, args.dtype)

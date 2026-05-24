@@ -101,7 +101,7 @@ def unproject_depth_map_to_point_map(depth_map: np.ndarray, extrinsic: np.ndarra
     )
 
 # Download dataset if not present
-if not os.path.exists("nerf_real_360"):
+if not os.path.exists("pinecone"):
     zip_path = "nerf_real_360.zip"
     download_file(
         "https://huggingface.co/datasets/1kaiser/NERF_360/resolve/main/nerf_real_360.zip?download=true", 
@@ -112,7 +112,7 @@ if not os.path.exists("nerf_real_360"):
         zip_ref.extractall(".")
     print("Extraction complete.")
 else:
-    print("Dataset directory nerf_real_360/ already exists.")
+    print("Dataset directory pinecone/ already exists.")
 
 # Download models if not present
 download_file(
@@ -129,8 +129,8 @@ download_file(
 # Load 2 images from the nerf real 360 pinecone dataset.
 
 # %%
-image_dir = "nerf_real_360/pinecone/images"
-image_paths = sorted(glob.glob(os.path.join(image_dir, "*")))[:8]
+image_dir = "pinecone/images"
+image_paths = sorted(glob.glob(os.path.join(image_dir, "*")))[:2]
 print("Loading images:")
 for p in image_paths:
     print(f"  - {os.path.basename(p)}")
@@ -145,67 +145,240 @@ x_jax = jnp.array(x_pt.permute(0, 1, 3, 4, 2).numpy())
 print(f"Preprocessed JAX shape: {x_jax.shape}")
 
 # %% [markdown]
-# ## 2. PyTorch Inference
+# ## 2. Benchmarking Runner (Subprocess Execution)
+# To measure the peak memory of each model configuration accurately without memory pollution, we run them in separate processes.
 
 # %%
-print("Initializing PyTorch model...")
-pt_model = PTModel(
-    patch_size=16,
-    embed_dim=1024,
-    enable_camera=True,
-    enable_depth=True,
-    enable_alignment=False
-).eval()
+import sys
+import subprocess
+import gc
+import resource
 
-pt_state_dict = torch.load("vggt_omega_1b_512.pt", map_location="cpu")
-if "model" in pt_state_dict:
-    pt_state_dict = pt_state_dict["model"]
-pt_model.load_state_dict(pt_state_dict, strict=True)
+# Check if running inside a Jupyter notebook:
+is_notebook = 'ipykernel' in sys.modules
 
-print("Running PyTorch CPU Inference...")
-t0 = time.time()
-with torch.no_grad():
-    pt_preds = pt_model(x_pt)
-pt_time = time.time() - t0
-print(f"PyTorch CPU inference completed in {pt_time:.4f} seconds")
+if not is_notebook:
+    import argparse
+    parser = argparse.ArgumentParser(description="VGGT-Omega Parity and Subprocess Benchmark")
+    parser.add_argument("--mode", type=str, choices=["run_all", "pytorch", "jax_fp32", "jax_bf16_jit", "jax_mmap"], default="run_all")
+    args, unknown = parser.parse_known_args()
+    mode = args.mode
+else:
+    mode = "run_all"
 
-# %% [markdown]
-# ## 3. JAX Inference
+def get_peak_ram_mb():
+    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024.0
 
-# %%
-print("Initializing JAX model...")
-jax_model = JAXModel(
-    patch_size=16,
-    embed_dim=1024,
-    enable_camera=True,
-    enable_depth=True,
-    enable_alignment=False
-)
+if mode == "pytorch":
+    print("--- Running PyTorch CPU Baseline (float32) ---")
+    print(f"Start RAM: {get_peak_ram_mb():.2f} MB")
+    
+    t_start = time.time()
+    pt_model = PTModel(
+        patch_size=16,
+        embed_dim=1024,
+        enable_camera=True,
+        enable_depth=True,
+        enable_alignment=False
+    ).eval()
+    
+    pt_state_dict = torch.load("vggt_omega_1b_512.pt", map_location="cpu")
+    if "model" in pt_state_dict:
+        pt_state_dict = pt_state_dict["model"]
+    pt_model.load_state_dict(pt_state_dict, strict=True)
+    t_load = time.time() - t_start
+    print(f"Weights loaded in {t_load:.2f} s. RAM: {get_peak_ram_mb():.2f} MB")
+    
+    t0 = time.time()
+    with torch.no_grad():
+        pt_preds = pt_model(x_pt)
+    t_inf = time.time() - t0
+    
+    # Save outputs to file
+    np.savez(
+        "pt_preds.npz",
+        camera_and_register_tokens=pt_preds["camera_and_register_tokens"].cpu().numpy(),
+        pose_enc=pt_preds["pose_enc"].cpu().numpy(),
+        depth=pt_preds["depth"].cpu().numpy(),
+        depth_conf=pt_preds["depth_conf"].cpu().numpy(),
+        images=pt_preds["images"].cpu().numpy()
+    )
+    
+    print(f"BENCHMARK_METRICS: load_s={t_load:.4f}, compile_s=0.0000, inf_s={t_inf:.4f}, peak_ram_mb={get_peak_ram_mb():.2f}")
+    sys.exit(0)
 
-variables_template = jax_model.init(jax.random.PRNGKey(0), jnp.zeros((1, len(image_paths), 512, 512, 3)))
-restored_params = load_checkpoint(variables_template, "vggt_omega_1b_512.msgpack.zst")
+elif mode == "jax_fp32":
+    print("--- Running JAX CPU Baseline (float32, with template init) ---")
+    print(f"Start RAM: {get_peak_ram_mb():.2f} MB")
+    
+    t_start = time.time()
+    jax_model = JAXModel(
+        patch_size=16,
+        embed_dim=1024,
+        enable_camera=True,
+        enable_depth=True,
+        enable_alignment=False
+    )
+    
+    variables_template = jax_model.init(jax.random.PRNGKey(0), jnp.zeros((1, len(image_paths), 512, 512, 3)))
+    restored_params = load_checkpoint(variables_template, "vggt_omega_1b_512.msgpack.zst")
+    t_load = time.time() - t_start
+    print(f"Weights loaded in {t_load:.2f} s. RAM: {get_peak_ram_mb():.2f} MB")
+    
+    @jax.jit
+    def jax_predict(params, x):
+        return jax_model.apply(params, x)
+        
+    t0 = time.time()
+    preds = jax_predict(restored_params, x_jax)
+    for k, v in preds.items():
+        if isinstance(v, jnp.ndarray):
+            v.block_until_ready()
+    t_compile = time.time() - t0
+    
+    t0 = time.time()
+    preds = jax_predict(restored_params, x_jax)
+    for k, v in preds.items():
+        if isinstance(v, jnp.ndarray):
+            v.block_until_ready()
+    t_inf = time.time() - t0
+    
+    np.savez(
+        "jax_preds.npz",
+        camera_and_register_tokens=np.array(preds["camera_and_register_tokens"]),
+        pose_enc=np.array(preds["pose_enc"]),
+        depth=np.array(preds["depth"]),
+        depth_conf=np.array(preds["depth_conf"])
+    )
+    print(f"BENCHMARK_METRICS: load_s={t_load:.4f}, compile_s={t_compile:.4f}, inf_s={t_inf:.4f}, peak_ram_mb={get_peak_ram_mb():.2f}")
+    sys.exit(0)
 
-@jax.jit
-def jax_predict(params, x):
-    return jax_model.apply(params, x)
+elif mode == "jax_bf16_jit":
+    print("--- Running JAX CPU Low-RAM (bfloat16, direct loading, JIT) ---")
+    print(f"Start RAM: {get_peak_ram_mb():.2f} MB")
+    
+    t_start = time.time()
+    # Initialize in bfloat16
+    jax_model = JAXModel(
+        patch_size=16,
+        embed_dim=1024,
+        enable_camera=True,
+        enable_depth=True,
+        enable_alignment=False,
+        dtype=jnp.bfloat16
+    )
+    
+    # Bypass template initialization to save RAM
+    restored_params = load_checkpoint(None, "vggt_omega_1b_512_bf16.msgpack.zst")
+    t_load = time.time() - t_start
+    print(f"Weights loaded in {t_load:.2f} s. RAM: {get_peak_ram_mb():.2f} MB")
+    
+    # Cast input to bfloat16
+    x_jax_bf16 = x_jax.astype(jnp.bfloat16)
+    
+    @jax.jit
+    def jax_predict(params, x):
+        return jax_model.apply(params, x)
+        
+    t0 = time.time()
+    preds = jax_predict(restored_params, x_jax_bf16)
+    for k, v in preds.items():
+        if isinstance(v, jnp.ndarray):
+            v.block_until_ready()
+    t_compile = time.time() - t0
+    
+    t0 = time.time()
+    preds = jax_predict(restored_params, x_jax_bf16)
+    for k, v in preds.items():
+        if isinstance(v, jnp.ndarray):
+            v.block_until_ready()
+    t_inf = time.time() - t0
+    
+    print(f"BENCHMARK_METRICS: load_s={t_load:.4f}, compile_s={t_compile:.4f}, inf_s={t_inf:.4f}, peak_ram_mb={get_peak_ram_mb():.2f}")
+    sys.exit(0)
 
-print("Compiling JAX model (first run)...")
-t0 = time.time()
-jax_preds = jax_predict(restored_params, x_jax)
-for k, v in jax_preds.items():
-    if isinstance(v, jnp.ndarray):
-        v.block_until_ready()
-jax_compile_time = time.time() - t0
-print(f"JAX CPU first run (compile + inference) completed in {jax_compile_time:.4f} seconds")
+elif mode == "jax_mmap":
+    print("--- Running JAX CPU Ultra-Low-RAM (float16, memory-mapped, eager) ---")
+    print(f"Start RAM: {get_peak_ram_mb():.2f} MB")
+    
+    t_start = time.time()
+    
+    # Increase open files limit
+    try:
+        soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+        resource.setrlimit(resource.RLIMIT_NOFILE, (32768, hard))
+    except Exception as e:
+        print(f"Warning: could not increase open file limit: {e}")
+        
+    # Initialize in float16
+    jax_model = JAXModel(
+        patch_size=16,
+        embed_dim=1024,
+        enable_camera=True,
+        enable_depth=True,
+        enable_alignment=False,
+        dtype=jnp.float16
+    )
+    
+    # Load memory-mapped parameters from directory
+    def load_recursive(current_dir):
+        d = {}
+        for entry in os.scandir(current_dir):
+            if entry.is_dir():
+                d[entry.name] = load_recursive(entry.path)
+            elif entry.is_file() and entry.name.endswith(".npy"):
+                key = entry.name[:-4]
+                d[key] = np.load(entry.path, mmap_mode='r')
+        return d
+        
+    restored_params = load_recursive("vggt_omega_1b_512_fp16_mmap")
+    t_load = time.time() - t_start
+    print(f"Weights loaded in {t_load:.2f} s. RAM: {get_peak_ram_mb():.2f} MB")
+    
+    # Cast input to float16 and disable JIT
+    x_jax_fp16 = x_jax.astype(jnp.float16)
+    
+    t0 = time.time()
+    preds = jax_model.apply(restored_params, x_jax_fp16)
+    for k, v in preds.items():
+        if isinstance(v, jnp.ndarray):
+            v.block_until_ready()
+    t_inf = time.time() - t0
+    
+    print(f"BENCHMARK_METRICS: load_s={t_load:.4f}, compile_s=0.0000, inf_s={t_inf:.4f}, peak_ram_mb={get_peak_ram_mb():.2f}")
+    sys.exit(0)
 
-print("Running JAX compiled inference (second run)...")
-t0 = time.time()
-jax_preds = jax_predict(restored_params, x_jax)
-for k, v in jax_preds.items():
-    if isinstance(v, jnp.ndarray):
-        v.block_until_ready()
-jax_jit_time = time.time() - t0
-print(f"JAX CPU compiled inference completed in {jax_jit_time:.4f} seconds")
+# Parent runner logic (run_all mode):
+print("Executing subprocess benchmarks...")
+python_bin = sys.executable
+benchmarks = {}
+
+for target_mode in ["pytorch", "jax_fp32", "jax_bf16_jit", "jax_mmap"]:
+    print(f"\nLaunching {target_mode} subprocess...")
+    try:
+        script_path = __file__
+    except NameError:
+        script_path = "inference_comparison.py"
+    cmd = [python_bin, script_path, "--mode", target_mode]
+    res = subprocess.run(cmd, capture_output=True, text=True)
+    if res.returncode != 0:
+        print(f"Subprocess failed with code {res.returncode}")
+        print("Stdout:", res.stdout)
+        print("Stderr:", res.stderr)
+        raise RuntimeError(f"Benchmark failed for {target_mode}")
+        
+    print(res.stdout)
+    
+    # Parse metrics
+    metrics_line = [line for line in res.stdout.splitlines() if "BENCHMARK_METRICS" in line]
+    if metrics_line:
+        metrics_str = metrics_line[0].split("BENCHMARK_METRICS: ")[1]
+        metrics = dict(item.split("=") for item in metrics_str.split(", "))
+        benchmarks[target_mode] = {k: float(v) for k, v in metrics.items()}
+
+# Load saved predictions for parity and visualization
+pt_preds = np.load("pt_preds.npz")
+jax_preds = np.load("jax_preds.npz")
 
 # %% [markdown]
 # ## 4. Output Parity Verification
@@ -217,9 +390,7 @@ all_passed = True
 
 for key in keys:
     pt_val = pt_preds[key]
-    if isinstance(pt_val, torch.Tensor):
-        pt_val = pt_val.cpu().numpy()
-    jax_val = np.array(jax_preds[key])
+    jax_val = jax_preds[key]
     
     diff = np.max(np.abs(pt_val - jax_val))
     mean_diff = np.mean(np.abs(pt_val - jax_val))
@@ -239,6 +410,18 @@ if all_passed:
 else:
     print("\nFAIL: Parity mismatch detected!")
 
+# Print final Comparison Table
+print("\n" + "="*80)
+print("                    VGGT-OMEGA INFERENCE PERFORMANCE COMPARISON")
+print("="*80)
+print(f"| Model / Implementation | Precision | Mode | Loading Time | Warm Inference | Peak RAM |")
+print(f"| :--- | :--- | :--- | :---: | :---: | :---: |")
+print(f"| PyTorch CPU Baseline | float32 | Eager | {benchmarks['pytorch']['load_s']:.2f} s | {benchmarks['pytorch']['inf_s']:.4f} s | {benchmarks['pytorch']['peak_ram_mb']:.1f} MB |")
+print(f"| JAX CPU Baseline | float32 | JIT | {benchmarks['jax_fp32']['load_s']:.2f} s | {benchmarks['jax_fp32']['inf_s']:.4f} s | {benchmarks['jax_fp32']['peak_ram_mb']:.1f} MB |")
+print(f"| JAX CPU Low-RAM | bfloat16 | JIT | {benchmarks['jax_bf16_jit']['load_s']:.2f} s | {benchmarks['jax_bf16_jit']['inf_s']:.4f} s | {benchmarks['jax_bf16_jit']['peak_ram_mb']:.1f} MB |")
+print(f"| JAX CPU Ultra-Low-RAM | float16 | Eager (mmap) | {benchmarks['jax_mmap']['load_s']:.2f} s | {benchmarks['jax_mmap']['inf_s']:.4f} s | {benchmarks['jax_mmap']['peak_ram_mb']:.1f} MB |")
+print("="*80)
+
 # %% [markdown]
 # ## 5. Visualize Results
 
@@ -257,7 +440,7 @@ for i in range(num_plot_frames):
     axes[i, 0].axis("off")
     
     # PyTorch Depth
-    im_pt = axes[i, 1].imshow(pt_preds["depth"][0, i, ..., 0].cpu().numpy(), cmap="inferno")
+    im_pt = axes[i, 1].imshow(pt_preds["depth"][0, i, ..., 0], cmap="inferno")
     axes[i, 1].set_title(f"PyTorch Depth (Frame {i})")
     axes[i, 1].axis("off")
     fig.colorbar(im_pt, ax=axes[i, 1], fraction=0.046, pad=0.04)
@@ -269,7 +452,7 @@ for i in range(num_plot_frames):
     fig.colorbar(im_jax, ax=axes[i, 2], fraction=0.046, pad=0.04)
     
     # Difference Map
-    diff_depth = np.abs(pt_preds["depth"][0, i, ..., 0].cpu().numpy() - jax_preds["depth"][0, i, ..., 0])
+    diff_depth = np.abs(pt_preds["depth"][0, i, ..., 0] - jax_preds["depth"][0, i, ..., 0])
     im_diff = axes[i, 3].imshow(diff_depth, cmap="coolwarm")
     axes[i, 3].set_title(f"Absolute Diff (Frame {i})")
     axes[i, 3].axis("off")
@@ -289,14 +472,14 @@ print("Processing 3D point cloud projections...")
 
 # Decode camera parameters
 pt_extrinsic, pt_intrinsic = encoding_to_camera(
-    pt_preds["pose_enc"],
+    torch.from_numpy(pt_preds["pose_enc"]),
     pt_preds["images"].shape[-2:],
 )
-pt_extrinsic_np = pt_extrinsic.detach().cpu().numpy()[0]
-pt_intrinsic_np = pt_intrinsic.detach().cpu().numpy()[0]
-pt_depth_np = pt_preds["depth"].detach().cpu().numpy()[0]
-pt_conf_np = pt_preds["depth_conf"].detach().cpu().numpy()[0]
-pt_images_np = pt_preds["images"].detach().cpu().numpy()[0]
+pt_extrinsic_np = pt_extrinsic.numpy()[0]
+pt_intrinsic_np = pt_intrinsic.numpy()[0]
+pt_depth_np = pt_preds["depth"][0]
+pt_conf_np = pt_preds["depth_conf"][0]
+pt_images_np = pt_preds["images"][0]
 
 pt_world_points = unproject_depth_map_to_point_map(pt_depth_np, pt_extrinsic_np, pt_intrinsic_np)
 
