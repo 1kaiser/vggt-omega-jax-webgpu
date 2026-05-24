@@ -245,10 +245,10 @@ elif mode == "jax_fp32":
     
     np.savez(
         "jax_preds.npz",
-        camera_and_register_tokens=np.array(preds["camera_and_register_tokens"]),
-        pose_enc=np.array(preds["pose_enc"]),
-        depth=np.array(preds["depth"]),
-        depth_conf=np.array(preds["depth_conf"])
+        camera_and_register_tokens=np.array(preds["camera_and_register_tokens"]).astype(np.float32),
+        pose_enc=np.array(preds["pose_enc"]).astype(np.float32),
+        depth=np.array(preds["depth"]).astype(np.float32),
+        depth_conf=np.array(preds["depth_conf"]).astype(np.float32)
     )
     print(f"BENCHMARK_METRICS: load_s={t_load:.4f}, compile_s={t_compile:.4f}, inf_s={t_inf:.4f}, peak_ram_mb={get_peak_ram_mb():.2f}")
     sys.exit(0)
@@ -293,6 +293,14 @@ elif mode == "jax_bf16_jit":
         if isinstance(v, jnp.ndarray):
             v.block_until_ready()
     t_inf = time.time() - t0
+    
+    np.savez(
+        "jax_bf16_preds.npz",
+        camera_and_register_tokens=np.array(preds["camera_and_register_tokens"]).astype(np.float32),
+        pose_enc=np.array(preds["pose_enc"]).astype(np.float32),
+        depth=np.array(preds["depth"]).astype(np.float32),
+        depth_conf=np.array(preds["depth_conf"]).astype(np.float32)
+    )
     
     print(f"BENCHMARK_METRICS: load_s={t_load:.4f}, compile_s={t_compile:.4f}, inf_s={t_inf:.4f}, peak_ram_mb={get_peak_ram_mb():.2f}")
     sys.exit(0)
@@ -345,6 +353,14 @@ elif mode == "jax_mmap":
             v.block_until_ready()
     t_inf = time.time() - t0
     
+    np.savez(
+        "jax_mmap_preds.npz",
+        camera_and_register_tokens=np.array(preds["camera_and_register_tokens"]).astype(np.float32),
+        pose_enc=np.array(preds["pose_enc"]).astype(np.float32),
+        depth=np.array(preds["depth"]).astype(np.float32),
+        depth_conf=np.array(preds["depth_conf"]).astype(np.float32)
+    )
+    
     print(f"BENCHMARK_METRICS: load_s={t_load:.4f}, compile_s=0.0000, inf_s={t_inf:.4f}, peak_ram_mb={get_peak_ram_mb():.2f}")
     sys.exit(0)
 
@@ -377,8 +393,24 @@ for target_mode in ["pytorch", "jax_fp32", "jax_bf16_jit", "jax_mmap"]:
         benchmarks[target_mode] = {k: float(v) for k, v in metrics.items()}
 
 # Load saved predictions for parity and visualization
-pt_preds = np.load("pt_preds.npz")
-jax_preds = np.load("jax_preds.npz")
+def load_and_cast_preds(path):
+    data = np.load(path)
+    d = {}
+    for k in data.files:
+        val = data[k]
+        if val.dtype.kind in ['f', 'b', 'V', 'O']:
+            try:
+                d[k] = val.astype(np.float32)
+            except Exception:
+                d[k] = val
+        else:
+            d[k] = val
+    return d
+
+pt_preds = load_and_cast_preds("pt_preds.npz")
+jax_preds = load_and_cast_preds("jax_preds.npz")
+jax_bf16_preds = load_and_cast_preds("jax_bf16_preds.npz")
+jax_mmap_preds = load_and_cast_preds("jax_mmap_preds.npz")
 
 # %% [markdown]
 # ## 4. Output Parity Verification
@@ -386,29 +418,34 @@ jax_preds = np.load("jax_preds.npz")
 # %%
 print("--- Verifying Output Parity ---")
 keys = ["camera_and_register_tokens", "pose_enc", "depth", "depth_conf"]
-all_passed = True
 
-for key in keys:
-    pt_val = pt_preds[key]
-    jax_val = jax_preds[key]
-    
-    diff = np.max(np.abs(pt_val - jax_val))
-    mean_diff = np.mean(np.abs(pt_val - jax_val))
-    
-    status = "PASSED" if diff < 1e-3 else "FAILED"
-    if status == "FAILED":
-        all_passed = False
+configs = [
+    ("JAX Baseline (fp32)", jax_preds),
+    ("JAX Low-RAM (bf16)", jax_bf16_preds),
+    ("JAX Ultra-Low-RAM (fp16 mmap)", jax_mmap_preds)
+]
+
+for name, preds in configs:
+    print(f"\nComparing PyTorch vs {name}:")
+    all_passed = True
+    for key in keys:
+        pt_val = pt_preds[key]
+        jax_val = preds[key]
         
-    print(f"{key}:")
-    print(f"  Shape: {pt_val.shape}")
-    print(f"  Max Absolute Difference: {diff:.6e}")
-    print(f"  Mean Absolute Difference: {mean_diff:.6e}")
-    print(f"  Status: {status}")
-
-if all_passed:
-    print("\nSUCCESS: All outputs match within the 1e-3 threshold!")
-else:
-    print("\nFAIL: Parity mismatch detected!")
+        diff = np.max(np.abs(pt_val - jax_val))
+        mean_diff = np.mean(np.abs(pt_val - jax_val))
+        
+        # bf16/fp16 has slightly higher numeric tolerance (e.g. 5e-3 / 1e-3)
+        tol = 5e-3 if "bf16" in name else 1e-3
+        status = "PASSED" if diff < tol else "FAILED"
+        if status == "FAILED":
+            all_passed = False
+            
+        print(f"  {key}:")
+        print(f"    Shape: {pt_val.shape}")
+        print(f"    Max Absolute Difference: {diff:.6e}")
+        print(f"    Mean Absolute Difference: {mean_diff:.6e}")
+        print(f"    Status: {status}")
 
 # Print final Comparison Table
 print("\n" + "="*80)
@@ -426,39 +463,34 @@ print("="*80)
 # ## 5. Visualize Results
 
 # %%
-num_plot_frames = min(4, len(image_paths))
-fig, axes = plt.subplots(num_plot_frames, 4, figsize=(18, 4.5 * num_plot_frames))
+model_names = [
+    "PyTorch CPU Baseline (float32)",
+    "JAX CPU Baseline (float32)",
+    "JAX CPU Low-RAM (bfloat16)",
+    "JAX CPU Ultra-Low-RAM (float16 mmap)"
+]
+preds_list = [pt_preds, jax_preds, jax_bf16_preds, jax_mmap_preds]
 
-if num_plot_frames == 1:
-    axes = np.expand_dims(axes, axis=0)
+fig, axes = plt.subplots(4, 4, figsize=(18, 16))
 
-for i in range(num_plot_frames):
-    # Original Image
-    img_np = (x_jax[0, i] * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])).clip(0, 1)
-    axes[i, 0].imshow(img_np)
-    axes[i, 0].set_title(f"Frame {i} Image")
-    axes[i, 0].axis("off")
+for r in range(4):
+    model_name = model_names[r]
+    preds = preds_list[r]
     
-    # PyTorch Depth
-    im_pt = axes[i, 1].imshow(pt_preds["depth"][0, i, ..., 0], cmap="inferno")
-    axes[i, 1].set_title(f"PyTorch Depth (Frame {i})")
-    axes[i, 1].axis("off")
-    fig.colorbar(im_pt, ax=axes[i, 1], fraction=0.046, pad=0.04)
-    
-    # JAX Depth
-    im_jax = axes[i, 2].imshow(jax_preds["depth"][0, i, ..., 0], cmap="inferno")
-    axes[i, 2].set_title(f"JAX Depth (Frame {i})")
-    axes[i, 2].axis("off")
-    fig.colorbar(im_jax, ax=axes[i, 2], fraction=0.046, pad=0.04)
-    
-    # Difference Map
-    diff_depth = np.abs(pt_preds["depth"][0, i, ..., 0] - jax_preds["depth"][0, i, ..., 0])
-    im_diff = axes[i, 3].imshow(diff_depth, cmap="coolwarm")
-    axes[i, 3].set_title(f"Absolute Diff (Frame {i})")
-    axes[i, 3].axis("off")
-    fig.colorbar(im_diff, ax=axes[i, 3], fraction=0.046, pad=0.04)
+    for i in range(2):
+        # Column 2*i: Original Image
+        img_np = (x_jax[0, i] * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])).clip(0, 1)
+        axes[r, 2 * i].imshow(img_np)
+        axes[r, 2 * i].set_title(f"{model_name}\nFrame {i} Image")
+        axes[r, 2 * i].axis("off")
+        
+        # Column 2*i+1: Depth Map
+        im = axes[r, 2 * i + 1].imshow(preds["depth"][0, i, ..., 0], cmap="inferno")
+        axes[r, 2 * i + 1].set_title(f"{model_name}\nFrame {i} Depth")
+        axes[r, 2 * i + 1].axis("off")
+        fig.colorbar(im, ax=axes[r, 2 * i + 1], fraction=0.046, pad=0.04)
 
-plt.suptitle(f"PyTorch vs JAX Depth Comparison on Pinecone Dataset (First {num_plot_frames} Frames)", fontsize=16)
+plt.suptitle("PyTorch vs Converted JAX Models Depth Parity Comparison (Pinecone Dataset)", fontsize=18, fontweight="bold")
 plt.tight_layout()
 plt.savefig("parity_comparison.png", dpi=150)
 plt.show()
@@ -470,33 +502,8 @@ print("Saved comparison plot to parity_comparison.png")
 # %%
 print("Processing 3D point cloud projections...")
 
-# Decode camera parameters
-pt_extrinsic, pt_intrinsic = encoding_to_camera(
-    torch.from_numpy(pt_preds["pose_enc"]),
-    pt_preds["images"].shape[-2:],
-)
-pt_extrinsic_np = pt_extrinsic.numpy()[0]
-pt_intrinsic_np = pt_intrinsic.numpy()[0]
-pt_depth_np = pt_preds["depth"][0]
-pt_conf_np = pt_preds["depth_conf"][0]
-pt_images_np = pt_preds["images"][0]
-
-pt_world_points = unproject_depth_map_to_point_map(pt_depth_np, pt_extrinsic_np, pt_intrinsic_np)
-
-# Decode JAX camera parameters (convert pose_enc from numpy/jax array to torch tensor first)
-jax_pose_enc_torch = torch.from_numpy(np.array(jax_preds["pose_enc"]))
-jax_extrinsic, jax_intrinsic = encoding_to_camera(
-    jax_pose_enc_torch,
-    pt_preds["images"].shape[-2:],
-)
-jax_extrinsic_np = jax_extrinsic.numpy()[0]
-jax_intrinsic_np = jax_intrinsic.numpy()[0]
-jax_depth_np = np.array(jax_preds["depth"])[0]
-jax_conf_np = np.array(jax_preds["depth_conf"])[0]
-
-jax_world_points = unproject_depth_map_to_point_map(jax_depth_np, jax_extrinsic_np, jax_intrinsic_np)
-
 # Preprocess colors (PyTorch format -> channels_last [0, 1])
+pt_images_np = pt_preds["images"][0]
 colors_np = np.transpose(pt_images_np, (0, 2, 3, 1))
 colors_np = (colors_np * np.array([0.229, 0.224, 0.225]) + np.array([0.485, 0.456, 0.406])).clip(0, 1)
 
@@ -553,73 +560,149 @@ def process_run(world_points, extrinsics, confidence, colors):
         
     return flat_points, flat_colors, cam_centers_c0, cam_dirs_c0
 
-pt_pts, pt_clrs, pt_cams, pt_dirs = process_run(pt_world_points, pt_extrinsic_np, pt_conf_np, colors_np)
-jax_pts, jax_clrs, jax_cams, jax_dirs = process_run(jax_world_points, jax_extrinsic_np, jax_conf_np, colors_np)
+def get_model_3d_data(preds, colors_np, pt_preds):
+    pose_enc_torch = torch.from_numpy(np.array(preds["pose_enc"]))
+    extrinsic, intrinsic = encoding_to_camera(
+        pose_enc_torch,
+        pt_preds["images"].shape[-2:],
+    )
+    extrinsic_np = extrinsic.numpy()[0]
+    intrinsic_np = intrinsic.numpy()[0]
+    depth_np = np.array(preds["depth"])[0]
+    conf_np = np.array(preds["depth_conf"])[0]
+    
+    world_points = unproject_depth_map_to_point_map(depth_np, extrinsic_np, intrinsic_np)
+    return process_run(world_points, extrinsic_np, conf_np, colors_np)
 
-fig, axes = plt.subplots(3, 2, figsize=(14, 18))
+pt_pts, pt_clrs, pt_cams, pt_dirs = get_model_3d_data(pt_preds, colors_np, pt_preds)
+jax_pts, jax_clrs, jax_cams, jax_dirs = get_model_3d_data(jax_preds, colors_np, pt_preds)
+jax_bf16_pts, jax_bf16_clrs, jax_bf16_cams, jax_bf16_dirs = get_model_3d_data(jax_bf16_preds, colors_np, pt_preds)
+jax_mmap_pts, jax_mmap_clrs, jax_mmap_cams, jax_mmap_dirs = get_model_3d_data(jax_mmap_preds, colors_np, pt_preds)
 
-views = [
-    ("Top View (X vs Z)", 0, 2, "X (Left-Right)", "Z (Forward-Back)", False),
-    ("Side View (Z vs Y)", 2, 1, "Z (Forward-Back)", "Y (Up-Down)", True),
-    ("Front View (X vs Y)", 0, 1, "X (Left-Right)", "Y (Up-Down)", True)
+fig = plt.figure(figsize=(24, 24))
+
+model_labels = [
+    "PyTorch CPU Baseline (float32)",
+    "JAX CPU Baseline (float32)",
+    "JAX CPU Low-RAM (bfloat16)",
+    "JAX CPU Ultra-Low-RAM (float16 mmap)"
 ]
+
+model_data = [
+    (pt_pts, pt_clrs, pt_cams, pt_dirs),
+    (jax_pts, jax_clrs, jax_cams, jax_dirs),
+    (jax_bf16_pts, jax_bf16_clrs, jax_bf16_cams, jax_bf16_dirs),
+    (jax_mmap_pts, jax_mmap_clrs, jax_mmap_cams, jax_mmap_dirs)
+]
+
+# Find overall limits to align all views properly
+all_pts = [d[0] for d in model_data if len(d[0]) > 0]
+if len(all_pts) > 0:
+    min_x = min(pts[:, 0].min() for pts in all_pts) - 0.2
+    max_x = max(pts[:, 0].max() for pts in all_pts) + 0.2
+    min_y_val = min(pts[:, 1].min() for pts in all_pts) - 0.2
+    max_y_val = max(pts[:, 1].max() for pts in all_pts) + 0.2
+    min_z = min(pts[:, 2].min() for pts in all_pts) - 0.2
+    max_z = max(pts[:, 2].max() for pts in all_pts) + 0.2
+else:
+    min_x, max_x = -1.0, 1.0
+    min_y_val, max_y_val = -1.0, 1.0
+    min_z, max_z = -1.0, 1.0
+
+min_h = -max_y_val
+max_h = -min_y_val
 
 T = len(pt_cams)
 cmap_cam = plt.cm.rainbow(np.linspace(0, 1, T))
 
-for row, (view_title, d1, d2, l1, l2, inv_y) in enumerate(views):
-    # PyTorch Column
-    ax_pt = axes[row, 0]
-    ax_pt.scatter(pt_pts[:, d1], pt_pts[:, d2], c=pt_clrs, s=2, alpha=0.6)
+for row in range(4):
+    label = model_labels[row]
+    pts, clrs, cams, dirs = model_data[row]
     
+    # Column 1: Top View (X vs Z)
+    ax1 = fig.add_subplot(4, 4, row * 4 + 1)
+    if len(pts) > 0:
+        ax1.scatter(pts[:, 0], pts[:, 2], c=clrs, s=2, alpha=0.6)
     for idx in range(T):
-        c_pos = pt_cams[idx]
-        c_dir = pt_dirs[idx]
+        c_pos = cams[idx]
+        c_dir = dirs[idx]
         c_color = cmap_cam[idx]
-        ax_pt.scatter(c_pos[d1], c_pos[d2], color=c_color, marker="^", s=100, edgecolors="black", label=f"Camera {idx}" if row==0 else "")
-        ax_pt.plot([c_pos[d1], c_pos[d1] + 0.15 * c_dir[d1]], [c_pos[d2], c_pos[d2] + 0.15 * c_dir[d2]], color=c_color, linewidth=2)
-        
-    ax_pt.set_title(f"PyTorch - {view_title}", fontsize=12, fontweight="bold")
-    ax_pt.set_xlabel(l1)
-    ax_pt.set_ylabel(l2)
-    ax_pt.grid(True, linestyle="--", alpha=0.5)
-    if inv_y:
-        ax_pt.invert_yaxis()
+        ax1.scatter(c_pos[0], c_pos[2], color=c_color, marker="^", s=100, edgecolors="black", label=f"Camera {idx}" if row==0 else "")
+        ax1.plot([c_pos[0], c_pos[0] + 0.15 * c_dir[0]], [c_pos[2], c_pos[2] + 0.15 * c_dir[2]], color=c_color, linewidth=2)
+    ax1.set_title(f"{label}\nTop View (X vs Z)", fontsize=11, fontweight="bold")
+    ax1.set_xlabel("X (Left-Right)")
+    ax1.set_ylabel("Z (Forward-Back)")
+    ax1.grid(True, linestyle="--", alpha=0.5)
+    ax1.set_xlim(min_x, max_x)
+    ax1.set_ylim(min_z, max_z)
     if row == 0:
-        ax_pt.legend()
+        ax1.legend()
         
-    # JAX Column
-    ax_jax = axes[row, 1]
-    ax_jax.scatter(jax_pts[:, d1], jax_pts[:, d2], c=jax_clrs, s=2, alpha=0.6)
-    
+    # Column 2: Side View (Z vs Y)
+    ax2 = fig.add_subplot(4, 4, row * 4 + 2)
+    if len(pts) > 0:
+        ax2.scatter(pts[:, 2], pts[:, 1], c=clrs, s=2, alpha=0.6)
     for idx in range(T):
-        c_pos = jax_cams[idx]
-        c_dir = jax_dirs[idx]
+        c_pos = cams[idx]
+        c_dir = dirs[idx]
         c_color = cmap_cam[idx]
-        ax_jax.scatter(c_pos[d1], c_pos[d2], color=c_color, marker="^", s=100, edgecolors="black", label=f"Camera {idx}" if row==0 else "")
-        ax_jax.plot([c_pos[d1], c_pos[d1] + 0.15 * c_dir[d1]], [c_pos[d2], c_pos[d2] + 0.15 * c_dir[d2]], color=c_color, linewidth=2)
-        
-    ax_jax.set_title(f"JAX - {view_title}", fontsize=12, fontweight="bold")
-    ax_jax.set_xlabel(l1)
-    ax_jax.set_ylabel(l2)
-    ax_jax.grid(True, linestyle="--", alpha=0.5)
-    if inv_y:
-        ax_jax.invert_yaxis()
-    if row == 0:
-        ax_jax.legend()
-        
-    min_d1 = min(pt_pts[:, d1].min(), jax_pts[:, d1].min()) - 0.2
-    max_d1 = max(pt_pts[:, d1].max(), jax_pts[:, d1].max()) + 0.2
-    min_d2 = min(pt_pts[:, d2].min(), jax_pts[:, d2].min()) - 0.2
-    max_d2 = max(pt_pts[:, d2].max(), jax_pts[:, d2].max()) + 0.2
+        ax2.scatter(c_pos[2], c_pos[1], color=c_color, marker="^", s=100, edgecolors="black")
+        ax2.plot([c_pos[2], c_pos[2] + 0.15 * c_dir[2]], [c_pos[1], c_pos[1] + 0.15 * c_dir[1]], color=c_color, linewidth=2)
+    ax2.set_title(f"{label}\nSide View (Z vs Y)", fontsize=11, fontweight="bold")
+    ax2.set_xlabel("Z (Forward-Back)")
+    ax2.set_ylabel("Y (Up-Down)")
+    ax2.grid(True, linestyle="--", alpha=0.5)
+    ax2.set_xlim(min_z, max_z)
+    ax2.set_ylim(min_y_val, max_y_val)
+    ax2.invert_yaxis()
     
-    ax_pt.set_xlim(min_d1, max_d1)
-    ax_pt.set_ylim(min_d2, max_d2)
-    ax_jax.set_xlim(min_d1, max_d1)
-    ax_jax.set_ylim(min_d2, max_d2)
+    # Column 3: Front View (X vs Y)
+    ax3 = fig.add_subplot(4, 4, row * 4 + 3)
+    if len(pts) > 0:
+        ax3.scatter(pts[:, 0], pts[:, 1], c=clrs, s=2, alpha=0.6)
+    for idx in range(T):
+        c_pos = cams[idx]
+        c_dir = dirs[idx]
+        c_color = cmap_cam[idx]
+        ax3.scatter(c_pos[0], c_pos[1], color=c_color, marker="^", s=100, edgecolors="black")
+        ax3.plot([c_pos[0], c_pos[0] + 0.15 * c_dir[0]], [c_pos[1], c_pos[1] + 0.15 * c_dir[1]], color=c_color, linewidth=2)
+    ax3.set_title(f"{label}\nFront View (X vs Y)", fontsize=11, fontweight="bold")
+    ax3.set_xlabel("X (Left-Right)")
+    ax3.set_ylabel("Y (Up-Down)")
+    ax3.grid(True, linestyle="--", alpha=0.5)
+    ax3.set_xlim(min_x, max_x)
+    ax3.set_ylim(min_y_val, max_y_val)
+    ax3.invert_yaxis()
+    
+    # Column 4: 3D Isometric View (X, Z, -Y)
+    ax4 = fig.add_subplot(4, 4, row * 4 + 4, projection='3d')
+    if len(pts) > 0:
+        ax4.scatter(pts[:, 0], pts[:, 2], -pts[:, 1], c=clrs, s=2, alpha=0.6)
+    for idx in range(T):
+        c_pos = cams[idx]
+        c_dir = dirs[idx]
+        c_color = cmap_cam[idx]
+        ax4.scatter(c_pos[0], c_pos[2], -c_pos[1], color=c_color, marker="^", s=100, edgecolors="black")
+        ax4.plot(
+            [c_pos[0], c_pos[0] + 0.15 * c_dir[0]],
+            [c_pos[2], c_pos[2] + 0.15 * c_dir[2]],
+            [-c_pos[1], -c_pos[1] - 0.15 * c_dir[1]],
+            color=c_color,
+            linewidth=2
+        )
+    ax4.set_title(f"{label}\n3D Isometric View", fontsize=11, fontweight="bold")
+    ax4.set_xlabel("X (Left-Right)")
+    ax4.set_ylabel("Z (Forward-Back)")
+    ax4.set_zlabel("Height (-Y)")
+    ax4.set_xlim(min_x, max_x)
+    ax4.set_ylim(min_z, max_z)
+    ax4.set_zlim(min_h, max_h)
+    ax4.view_init(elev=30, azim=45)
+    ax4.grid(True, linestyle="--", alpha=0.5)
 
-plt.suptitle("3D Reconstruction Orthographic View Comparison\nPyTorch (Original) vs JAX Port on Pinecone Dataset", fontsize=16, fontweight="bold")
+plt.suptitle("3D Reconstruction Multi-View Comparison\nPyTorch vs JAX (Vanilla, Low-RAM, Ultra-Low-RAM) on Pinecone Dataset", fontsize=18, fontweight="bold")
 plt.tight_layout()
 plt.savefig("views_comparison.png", dpi=150)
 plt.show()
 print("Saved 3D views comparison to views_comparison.png")
+
