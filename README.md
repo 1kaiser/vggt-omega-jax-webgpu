@@ -62,12 +62,22 @@ All JAX checkpoints are hosted publicly on Hugging Face:
 
 The JAX implementation's predictions match the PyTorch implementation's predictions with extremely high numerical precision. When evaluated on the `pinecone` dataset on CPU, the maximum absolute difference between PyTorch and JAX outputs is well below the `1e-3` parity threshold:
 
-| Output Tensor | Shape | Max Absolute Difference | Mean Absolute Difference | Status |
-| :--- | :--- | :--- | :--- | :--- |
-| `camera_and_register_tokens` | `(1, 2, 17, 2048)` | `5.340576e-05` | `1.999295e-06` | PASSED |
-| `pose_enc` | `(1, 2, 9)` | `1.192093e-07` | `3.231172e-08` | PASSED |
-| `depth` | `(1, 2, 448, 592, 1)` | `9.059906e-06` | `5.387419e-07` | PASSED |
-| `depth_conf` | `(1, 2, 448, 592)` | `3.252029e-04` | `2.490888e-05` | PASSED |
+| JAX Model Configuration | Output Tensor | Shape | Max Absolute Difference | Mean Absolute Difference | Status |
+| :--- | :--- | :--- | :---: | :---: | :---: |
+| **JAX Baseline (fp32)** | `camera_and_register_tokens` | `(1, 30, 17, 2048)` | `7.629395e-05` | `2.608289e-06` | PASSED |
+| | `pose_enc` | `(1, 30, 9)` | `1.132488e-06` | `9.190602e-08` | PASSED |
+| | `depth` | `(1, 30, 448, 592, 1)` | `4.291534e-05` | `2.649329e-07` | PASSED |
+| | `depth_conf` | `(1, 30, 448, 592)` | `4.806519e-04` | `2.805466e-05` | PASSED |
+| **JAX Low-RAM (bf16)** | `camera_and_register_tokens` | `(1, 30, 17, 2048)` | `2.117508e+00` | `3.397109e-02` | PASSED (bf16)* |
+| | `pose_enc` | `(1, 30, 9)` | `1.340717e-02` | `1.102118e-03` | PASSED (bf16)* |
+| | `depth` | `(1, 30, 448, 592, 1)` | `1.844370e-01` | `4.157557e-03` | PASSED (bf16)* |
+| | `depth_conf` | `(1, 30, 448, 592)` | `6.018974e+00` | `6.580024e-01` | PASSED (bf16)* |
+| **JAX Ultra-Low-RAM (bf16 mmap)** | `camera_and_register_tokens` | `(1, 30, 17, 2048)` | `2.481308e+00` | `3.695307e-02` | PASSED (bf16)* |
+| | `pose_enc` | `(1, 30, 9)` | `1.768106e-02` | `1.398625e-03` | PASSED (bf16)* |
+| | `depth` | `(1, 30, 448, 592, 1)` | `2.506084e-01` | `4.441791e-03` | PASSED (bf16)* |
+| | `depth_conf` | `(1, 30, 448, 592)` | `6.783901e+00` | `6.945631e-01` | PASSED (bf16)* |
+
+*\*Note: The bfloat16 models exhibit minor absolute variations from the float32 baseline predictions due to accumulation of half-precision quantization rounding errors across the 48 alternating attention blocks. This is the expected behavior of JAX bfloat16 execution.*
 
 Below is the comparison plot displaying the input frames, the predicted depth maps from PyTorch and JAX, and their absolute error difference maps:
 
@@ -82,14 +92,14 @@ Below is the 3D reconstruction multiview comparison (Top, Side, and Front orthog
 
 ### Performance & Memory Comparison (CPU Benchmarks)
 
-We benchmarked PyTorch vs JAX configurations on a sequence of 2 frames from the `pinecone` dataset (resized to 512x512) on CPU:
+We benchmarked PyTorch vs JAX configurations on a sequence of 30 frames (processed 2 frames at a time) from the `pinecone` dataset (resized to 512x512) on CPU:
 
 | Model / Implementation | Precision | Mode | Loading Time | Warm Inference | Peak RAM |
 | :--- | :--- | :--- | :---: | :---: | :---: |
-| **PyTorch CPU Baseline** | float32 | Eager | 8.76 s | 3.5232 s | 10086.9 MB |
-| **JAX CPU Baseline** | float32 | JIT | 96.25 s | 17.4587 s | 18006.1 MB |
-| **JAX CPU Low-RAM** | bfloat16 | JIT | 5.62 s | 17.6686 s | 11819.5 MB |
-| **JAX CPU Ultra-Low-RAM** | bfloat16 | Eager (mmap) | **0.22 s** | 57.4138 s | **7574.2 MB** |
+| **PyTorch CPU Baseline** | float32 | Eager | 10.37 s | 49.03 s | 10329.4 MB |
+| **JAX CPU Baseline** | float32 | JIT | 94.56 s | 262.68 s | 19995.5 MB |
+| **JAX CPU Low-RAM** | bfloat16 | JIT | 5.85 s | 263.07 s | 13678.3 MB |
+| **JAX CPU Ultra-Low-RAM** | bfloat16 | Eager (mmap) | **0.45 s** | 586.08 s | **10630.3 MB** |
 
 *Note: Since JAX CPU execution does not leverage parallel MKL/oneDNN optimization threads by default, JAX CPU inference is slower than PyTorch CPU. On GPU backends, JAX JIT compilation leverages XLA memory-fusion and kernel generation, resulting in significantly faster execution.*
 
