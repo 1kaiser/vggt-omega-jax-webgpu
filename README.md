@@ -71,11 +71,11 @@ The JAX implementation's predictions match the PyTorch implementation's predicti
 
 Below is the comparison plot displaying the input frames, the predicted depth maps from PyTorch and JAX, and their absolute error difference maps:
 
-![PyTorch vs JAX Depth Comparison](parity_comparison.png)
+![PyTorch vs JAX Depth Comparison](assets/parity_comparison.png)
 
 Below is the 3D reconstruction multiview comparison (Top, Side, and Front orthographic views) showing the point clouds and predicted camera positions/directions for both PyTorch and JAX implementations:
 
-![PyTorch vs JAX 3D Reconstruction Comparison](views_comparison.png)
+![PyTorch vs JAX 3D Reconstruction Comparison](assets/views_comparison.png)
 
 > [!NOTE]
 > **Autocast and Precision**: The default PyTorch execution on GPU utilizes Automatic Mixed Precision (`autocast` in `float16`/`bfloat16`). In contrast, JAX defaults to `float32`. This can cause slight output variance when running PyTorch on GPU versus JAX on CPU. To achieve bit-wise mathematical parity, both models must be run in `float32` on the CPU, which aligns the accumulators and achieves the near-zero difference metrics listed above.
@@ -107,14 +107,14 @@ We use [Jupytext](https://jupytext.readthedocs.io/) and [Papermill](https://pape
 To regenerate or run the comparison notebook:
 1.  Initialize the notebook template from the Jupytext script:
     ```bash
-    jupytext --to ipynb inference_comparison.py
+    jupytext --to ipynb notebooks/inference_comparison.py
     ```
 2.  Execute the notebook using Papermill:
     ```bash
-    papermill inference_comparison.ipynb executed_inference_comparison.ipynb --kernel num_gpu
+    papermill notebooks/inference_comparison.ipynb notebooks/executed_inference_comparison.ipynb --kernel num_gpu
     ```
 
-A standalone JAX-only demo notebook is also available at [inference_demo_jax.ipynb](file:///home/kaiser/projects/vggt-omega-jax-webgpu/inference_demo_jax.ipynb).
+A standalone JAX-only demo notebook is also available at [inference_demo_jax.ipynb](file:///home/kaiser/projects/vggt-omega-jax-webgpu/notebooks/inference_demo_jax.ipynb).
 
 
 ## Quick Start

@@ -16,7 +16,7 @@ import gradio as gr
 import numpy as np
 import torch
 
-from visual_util import predictions_to_glb
+from vggt_omega.utils.visual_util import predictions_to_glb
 from vggt_omega.models import VGGTOmega
 from vggt_omega.utils.load_fn import load_and_preprocess_images
 from vggt_omega.utils.pose_enc import encoding_to_camera
