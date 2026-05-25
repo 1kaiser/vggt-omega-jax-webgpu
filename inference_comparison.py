@@ -306,7 +306,7 @@ elif mode == "jax_bf16_jit":
     sys.exit(0)
 
 elif mode == "jax_mmap":
-    print("--- Running JAX CPU Ultra-Low-RAM (float16, memory-mapped, eager) ---")
+    print("--- Running JAX CPU Ultra-Low-RAM (bfloat16, memory-mapped, eager) ---")
     print(f"Start RAM: {get_peak_ram_mb():.2f} MB")
     
     t_start = time.time()
@@ -318,17 +318,18 @@ elif mode == "jax_mmap":
     except Exception as e:
         print(f"Warning: could not increase open file limit: {e}")
         
-    # Initialize in float16
+    # Initialize in bfloat16
     jax_model = JAXModel(
         patch_size=16,
         embed_dim=1024,
         enable_camera=True,
         enable_depth=True,
         enable_alignment=False,
-        dtype=jnp.float16
+        dtype=jnp.bfloat16
     )
     
     # Load memory-mapped parameters from directory
+    import ml_dtypes
     def load_recursive(current_dir):
         d = {}
         for entry in os.scandir(current_dir):
@@ -336,18 +337,22 @@ elif mode == "jax_mmap":
                 d[entry.name] = load_recursive(entry.path)
             elif entry.is_file() and entry.name.endswith(".npy"):
                 key = entry.name[:-4]
-                d[key] = np.load(entry.path, mmap_mode='r')
+                val = np.load(entry.path, mmap_mode='r')
+                if val.dtype == np.dtype('V2') or val.dtype.kind == 'V':
+                    d[key] = val.view(ml_dtypes.bfloat16)
+                else:
+                    d[key] = val
         return d
         
-    restored_params = load_recursive("vggt_omega_1b_512_fp16_mmap")
+    restored_params = load_recursive("vggt_omega_1b_512_bf16_mmap")
     t_load = time.time() - t_start
     print(f"Weights loaded in {t_load:.2f} s. RAM: {get_peak_ram_mb():.2f} MB")
     
-    # Cast input to float16 and disable JIT
-    x_jax_fp16 = x_jax.astype(jnp.float16)
+    # Cast input to bfloat16 and disable JIT
+    x_jax_bf16 = x_jax.astype(jnp.bfloat16)
     
     t0 = time.time()
-    preds = jax_model.apply(restored_params, x_jax_fp16)
+    preds = jax_model.apply(restored_params, x_jax_bf16)
     for k, v in preds.items():
         if isinstance(v, jnp.ndarray):
             v.block_until_ready()
@@ -422,7 +427,7 @@ keys = ["camera_and_register_tokens", "pose_enc", "depth", "depth_conf"]
 configs = [
     ("JAX Baseline (fp32)", jax_preds),
     ("JAX Low-RAM (bf16)", jax_bf16_preds),
-    ("JAX Ultra-Low-RAM (fp16 mmap)", jax_mmap_preds)
+    ("JAX Ultra-Low-RAM (bf16 mmap)", jax_mmap_preds)
 ]
 
 for name, preds in configs:
@@ -436,7 +441,7 @@ for name, preds in configs:
         mean_diff = np.mean(np.abs(pt_val - jax_val))
         
         # bf16/fp16 has slightly higher numeric tolerance (e.g. 5e-3 / 1e-3)
-        tol = 5e-3 if "bf16" in name else 1e-3
+        tol = 5e-3 if "bf16" in name or "mmap" in name else 1e-3
         status = "PASSED" if diff < tol else "FAILED"
         if status == "FAILED":
             all_passed = False
@@ -456,7 +461,7 @@ print(f"| :--- | :--- | :--- | :---: | :---: | :---: |")
 print(f"| PyTorch CPU Baseline | float32 | Eager | {benchmarks['pytorch']['load_s']:.2f} s | {benchmarks['pytorch']['inf_s']:.4f} s | {benchmarks['pytorch']['peak_ram_mb']:.1f} MB |")
 print(f"| JAX CPU Baseline | float32 | JIT | {benchmarks['jax_fp32']['load_s']:.2f} s | {benchmarks['jax_fp32']['inf_s']:.4f} s | {benchmarks['jax_fp32']['peak_ram_mb']:.1f} MB |")
 print(f"| JAX CPU Low-RAM | bfloat16 | JIT | {benchmarks['jax_bf16_jit']['load_s']:.2f} s | {benchmarks['jax_bf16_jit']['inf_s']:.4f} s | {benchmarks['jax_bf16_jit']['peak_ram_mb']:.1f} MB |")
-print(f"| JAX CPU Ultra-Low-RAM | float16 | Eager (mmap) | {benchmarks['jax_mmap']['load_s']:.2f} s | {benchmarks['jax_mmap']['inf_s']:.4f} s | {benchmarks['jax_mmap']['peak_ram_mb']:.1f} MB |")
+print(f"| JAX CPU Ultra-Low-RAM | bfloat16 | Eager (mmap) | {benchmarks['jax_mmap']['load_s']:.2f} s | {benchmarks['jax_mmap']['inf_s']:.4f} s | {benchmarks['jax_mmap']['peak_ram_mb']:.1f} MB |")
 print("="*80)
 
 # %% [markdown]
@@ -467,7 +472,7 @@ model_names = [
     "PyTorch CPU Baseline (float32)",
     "JAX CPU Baseline (float32)",
     "JAX CPU Low-RAM (bfloat16)",
-    "JAX CPU Ultra-Low-RAM (float16 mmap)"
+    "JAX CPU Ultra-Low-RAM (bfloat16 mmap)"
 ]
 preds_list = [pt_preds, jax_preds, jax_bf16_preds, jax_mmap_preds]
 
@@ -585,7 +590,7 @@ model_labels = [
     "PyTorch CPU Baseline (float32)",
     "JAX CPU Baseline (float32)",
     "JAX CPU Low-RAM (bfloat16)",
-    "JAX CPU Ultra-Low-RAM (float16 mmap)"
+    "JAX CPU Ultra-Low-RAM (bfloat16 mmap)"
 ]
 
 model_data = [
