@@ -9,6 +9,21 @@ from typing import List, Tuple, Dict, Any, Callable
 import jax
 import jax.numpy as jnp
 import flax.linen as nn
+import ctypes
+import gc
+
+try:
+    libc = ctypes.CDLL("libc.so.6")
+except Exception:
+    libc = None
+
+def trim_memory():
+    gc.collect()
+    if libc is not None:
+        try:
+            libc.malloc_trim(0)
+        except Exception:
+            pass
 
 from vggt_omega.jax.layers import (
     RMSNorm,
@@ -190,6 +205,8 @@ class DinoVisionTransformer(nn.Module):
 
         for blk in self.blocks:
             x = blk(x, rope=rope)
+            x.block_until_ready()
+            trim_memory()
 
         x_norm = self.norm(x)
         x_norm_cls_reg = x_norm[:, : self.n_storage_tokens + 1]
@@ -328,6 +345,8 @@ class Aggregator(nn.Module):
             # Frame blocks
             tokens = jnp.reshape(tokens, (batch_size * num_frames, num_tokens, embed_dim))
             tokens = self.frame_blocks[block_idx](tokens, rope=frame_rope)
+            tokens.block_until_ready()
+            trim_memory()
             frame_tokens = jnp.reshape(tokens, (batch_size, num_frames, num_tokens, embed_dim))
 
             # Inter-frame blocks
@@ -337,6 +356,7 @@ class Aggregator(nn.Module):
             if attention_type == "global":
                 tokens = jnp.reshape(tokens, (batch_size, num_frames * num_tokens, embed_dim))
                 tokens = self.inter_frame_blocks[block_idx](tokens, rope=None)
+                tokens.block_until_ready()
                 tokens = jnp.reshape(tokens, (batch_size, num_frames, num_tokens, embed_dim))
             elif attention_type == "register":
                 camera_and_register_tokens = tokens[:, :, : self.patch_token_start]
@@ -350,6 +370,7 @@ class Aggregator(nn.Module):
                 )
 
                 camera_and_register_tokens = self.inter_frame_blocks[block_idx](camera_and_register_tokens, rope=None)
+                camera_and_register_tokens.block_until_ready()
                 tokens = jnp.concatenate([camera_and_register_tokens, patch_tokens], axis=1)
 
                 camera_and_register_tokens = tokens[:, : num_frames * self.patch_token_start]
@@ -362,6 +383,9 @@ class Aggregator(nn.Module):
                     patch_tokens, (batch_size, num_frames, num_tokens - self.patch_token_start, embed_dim)
                 )
                 tokens = jnp.concatenate([camera_and_register_tokens, patch_tokens], axis=2)
+                tokens.block_until_ready()
+
+            trim_memory()
 
             if block_idx in self.cached_layer_indices:
                 outputs.append(jnp.concatenate([frame_tokens, tokens], axis=-1))

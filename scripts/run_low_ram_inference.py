@@ -1,4 +1,14 @@
 import os
+import sys
+
+# Memory optimization: restrict glibc memory arenas to prevent RSS bloat on multi-core systems
+if os.environ.get("MALLOC_ARENA_MAX") != "1":
+    os.environ["MALLOC_ARENA_MAX"] = "1"
+    try:
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        print(f"Warning: Failed to set MALLOC_ARENA_MAX=1 via re-exec: {e}")
+
 import glob
 import time
 import gc
@@ -57,12 +67,12 @@ def main():
         print(f"Dataset path {image_dir} not found. Running with dummy input.")
         x_jax = jnp.zeros((1, args.num_frames, args.resolution, args.resolution, 3), dtype=jnp_dtype)
     else:
-        from vggt_omega.utils.load_fn import load_and_preprocess_images
+        from vggt_omega.utils.load_fn import load_and_preprocess_images_np
         image_paths = sorted(glob.glob(os.path.join(image_dir, "*")))[:args.num_frames]
         print(f"Loading {len(image_paths)} images...")
-        x_pt = load_and_preprocess_images(image_paths, image_resolution=args.resolution, patch_size=16)
-        x_pt = x_pt.unsqueeze(0) # add batch dim
-        x_jax = jnp.array(x_pt.permute(0, 1, 3, 4, 2).numpy(), dtype=jnp_dtype)
+        x_np = load_and_preprocess_images_np(image_paths, image_resolution=args.resolution, patch_size=16)
+        x_np = np.expand_dims(x_np, axis=0) # add batch dim
+        x_jax = jnp.array(np.transpose(x_np, (0, 1, 3, 4, 2)), dtype=jnp_dtype)
 
     print(f"Input shape: {x_jax.shape}, dtype: {x_jax.dtype}")
     print(f"Peak RAM after loading input: {get_peak_ram_mb():.2f} MB")
@@ -99,7 +109,11 @@ def main():
                     d[entry.name] = load_recursive(entry.path)
                 elif entry.is_file() and entry.name.endswith(".npy"):
                     key = entry.name[:-4]
-                    d[key] = np.load(entry.path, mmap_mode='r')
+                    val = np.load(entry.path, mmap_mode='r')
+                    if val.dtype == np.dtype('V2') or val.dtype.kind == 'V':
+                        d[key] = val.view(ml_dtypes.bfloat16)
+                    else:
+                        d[key] = val
             return d
         restored_params = load_recursive(args.weights)
     else:

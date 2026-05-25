@@ -7,9 +7,7 @@
 import warnings
 
 import numpy as np
-import torch
 from PIL import Image
-from torchvision import transforms as TF
 
 
 def load_and_preprocess_images(image_path_list, mode="balanced", image_resolution=512, patch_size=16):
@@ -30,6 +28,7 @@ def load_and_preprocess_images(image_path_list, mode="balanced", image_resolutio
     if image_resolution % patch_size != 0:
         raise ValueError("image_resolution must be divisible by patch_size")
 
+    from torchvision import transforms as TF
     images = []
     shapes = set()
     to_tensor = TF.ToTensor()
@@ -54,6 +53,7 @@ def load_and_preprocess_images(image_path_list, mode="balanced", image_resolutio
         warnings.warn(f"Found images with different shapes: {shapes}; padding to a common size.", stacklevel=2)
         images = _pad_images_to_common_size(images, shapes)
 
+    import torch
     return torch.stack(images)
 
 
@@ -118,6 +118,7 @@ def _pad_images_to_common_size(images, shapes):
             pad_bottom = h_padding - pad_top
             pad_left = w_padding // 2
             pad_right = w_padding - pad_left
+            import torch
             image = torch.nn.functional.pad(
                 image,
                 (pad_left, pad_right, pad_top, pad_bottom),
@@ -127,3 +128,57 @@ def _pad_images_to_common_size(images, shapes):
         padded_images.append(image)
 
     return padded_images
+
+
+def load_and_preprocess_images_np(image_path_list, mode="balanced", image_resolution=512, patch_size=16):
+    if len(image_path_list) == 0:
+        raise ValueError("At least 1 image is required")
+    if mode not in ["balanced", "max_size"]:
+        raise ValueError("Mode must be either 'balanced' or 'max_size'")
+    if image_resolution <= 0:
+        raise ValueError("image_resolution must be positive")
+    if patch_size <= 0:
+        raise ValueError("patch_size must be positive")
+    if image_resolution % patch_size != 0:
+        raise ValueError("image_resolution must be divisible by patch_size")
+
+    images = []
+    shapes = set()
+
+    for image_path in image_path_list:
+        image = _crop_to_supported_aspect_ratio(_load_rgb_image(image_path))
+        width, height = image.size
+        aspect_ratio = height / max(width, 1)
+
+        if mode == "balanced":
+            target_h, target_w = _balanced_target_shape(aspect_ratio, image_resolution, patch_size)
+        else:
+            target_h, target_w = _max_size_target_shape(aspect_ratio, image_resolution, patch_size)
+
+        image = image.resize((target_w, target_h), Image.Resampling.BICUBIC)
+        
+        arr = np.array(image, dtype=np.float32) / 255.0
+        arr = np.transpose(arr, (2, 0, 1))
+
+        shapes.add((arr.shape[1], arr.shape[2]))
+        images.append(arr)
+
+    if len(shapes) > 1:
+        warnings.warn(f"Found images with different shapes: {shapes}; padding to a common size.", stacklevel=2)
+        max_height = max(shape[0] for shape in shapes)
+        max_width = max(shape[1] for shape in shapes)
+        padded_images = []
+        for img in images:
+            c, h, w = img.shape
+            h_padding = max_height - h
+            w_padding = max_width - w
+            if h_padding > 0 or w_padding > 0:
+                pad_top = h_padding // 2
+                pad_bottom = h_padding - pad_top
+                pad_left = w_padding // 2
+                pad_right = w_padding - pad_left
+                img = np.pad(img, ((0,0), (pad_top, pad_bottom), (pad_left, pad_right)), mode='constant', constant_values=1.0)
+            padded_images.append(img)
+        images = padded_images
+
+    return np.stack(images, axis=0)

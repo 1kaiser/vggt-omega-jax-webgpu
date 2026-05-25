@@ -223,6 +223,7 @@ class Mlp(nn.Module):
         return x
 
 
+@nn.jit
 class SelfAttentionBlock(nn.Module):
     dim: int
     num_heads: int
