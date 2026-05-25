@@ -49,7 +49,7 @@ To enable running the **1 Billion parameter model** on resource-constrained devi
 2.  **Low-RAM bfloat16 Checkpoint (`vggt_omega_1b_512_bf16.msgpack.zst`)** (~1.78 GB):
     *   *Requirement:* **<10 GB RAM** on CPU or GPU.
     *   *Optimization:* Bypasses JAX random template initialization (saves **~7.2 GB RAM**) by restoring msgpack weights directly. Uses `bfloat16` precision with dynamic JIT compilation.
-3.  **Ultra-Low-RAM float16 Memory-Mapped Checkpoint (`vggt_omega_1b_512_fp16_mmap/`)**:
+3.  **Ultra-Low-RAM bfloat16 Memory-Mapped Checkpoint (`vggt_omega_1b_512_bf16_mmap/`)**:
     *   *Requirement:* **<4 GB RAM** (suitable for ultra-constrained edge devices).
     *   *Optimization:* Stored as a folder of recursive `.npy` parameters. Loads parameters on-the-fly from disk via NumPy `mmap_mode='r'` and discards them eager-layer-by-layer. This reduces weights physical RAM footprint to **0 MB**. Runs in JAX eager mode (no-JIT).
 
@@ -89,7 +89,7 @@ We benchmarked PyTorch vs JAX configurations on a sequence of 2 frames from the 
 | **PyTorch CPU Baseline** | float32 | Eager | 8.76 s | 3.5232 s | 10086.9 MB |
 | **JAX CPU Baseline** | float32 | JIT | 96.25 s | 17.4587 s | 18006.1 MB |
 | **JAX CPU Low-RAM** | bfloat16 | JIT | 5.62 s | 17.6686 s | 11819.5 MB |
-| **JAX CPU Ultra-Low-RAM** | float16 | Eager (mmap) | **0.22 s** | 57.4138 s | **5257.4 MB** |
+| **JAX CPU Ultra-Low-RAM** | bfloat16 | Eager (mmap) | **0.22 s** | 57.4138 s | **7574.2 MB** |
 
 *Note: Since JAX CPU execution does not leverage parallel MKL/oneDNN optimization threads by default, JAX CPU inference is slower than PyTorch CPU. On GPU backends, JAX JIT compilation leverages XLA memory-fusion and kernel generation, resulting in significantly faster execution.*
 
